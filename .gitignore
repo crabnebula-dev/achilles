@@ -1,0 +1,75 @@
+# Rust / Cargo
+target/
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/WixTools/
+.tauri/
+
+# Bun
+node_modules/
+bun.lockb
+.bun/
+
+# Build output
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Editor / IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.zed/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Coverage / test artifacts
+coverage/
+*.lcov
+.nyc_output/
+
+# Misc caches
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.stylelintcache

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Achilles</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Achilles</h1>
+    <div id="status">idle</div>
+    <button id="export-all" type="button" title="Export every row (and any detail you've opened) as JSON">Export JSON</button>
+    <button id="settings" type="button" title="CVE source settings">Settings</button>
+    <button id="rescan" type="button">Rescan</button>
+  </header>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <header>
+        <h2>CVE sources</h2>
+        <button type="button" id="settings-close" aria-label="Close">&times;</button>
+      </header>
+      <p id="settings-path" class="muted"></p>
+
+      <section class="source source--primary">
+        <label>
+          <input type="checkbox" name="euvd" />
+          <strong>EUVD</strong>
+          <span class="muted">&mdash; ENISA European Vulnerability Database</span>
+        </label>
+        <p class="muted">
+          Public, unauthenticated. EU-CNA coverage the US-centric feeds miss.
+          <strong>Achilles' primary source</strong> — on by default.
+        </p>
+      </section>
+
+      <section class="source">
+        <label>
+          <input type="checkbox" name="osv" />
+          <strong>OSV</strong>
+          <span class="muted">&mdash; Open-source package advisories (npm, crates.io, …)</span>
+        </label>
+        <p class="muted">Public, unauthenticated. Covers Electron, Tauri, React Native, and every bundled npm dependency.</p>
+      </section>
+
+      <section class="source">
+        <label>
+          <input type="checkbox" name="nvd" />
+          <strong>NVD</strong>
+          <span class="muted">&mdash; NIST National Vulnerability Database</span>
+        </label>
+        <label class="field">
+          <span>API key (optional)</span>
+          <input type="password" name="nvd_api_key" placeholder="raises rate limit 5→50 per 30s" autocomplete="off" />
+        </label>
+        <p class="muted">Keyed by CPE. Covers runtimes EUVD/OSV don't: Chromium, Node.js, Qt, Flutter, JDK, WebKit, …</p>
+      </section>
+
+      <section class="source">
+        <label>
+          <input type="checkbox" name="ghsa" />
+          <strong>GHSA</strong> <span class="muted">&mdash; GitHub Security Advisories</span>
+        </label>
+        <label class="field">
+          <span>Personal access token (required)</span>
+          <input type="password" name="ghsa_token" placeholder="ghp_… or github_pat_…" autocomplete="off" />
+        </label>
+        <p class="muted">Unauth rate limit (60/h) is too low to be useful. A classic PAT with no scopes suffices.</p>
+      </section>
+
+      <section class="source">
+        <strong>Filtering</strong>
+        <label class="field">
+          <span>Hide CVEs older than</span>
+          <input type="number" name="max_age_years" min="0" max="50" step="1" style="width:6em" />
+          <span class="muted">years (0 = no filter)</span>
+        </label>
+        <p class="muted">
+          Wide-net CPEs (Safari, Java, Qt, Chromium …) otherwise return decades of
+          irrelevant history. Advisories without a publication date are never filtered.
+        </p>
+      </section>
+
+      <footer>
+        <button type="button" id="settings-cancel">Cancel</button>
+        <button type="submit" id="settings-save">Save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <main>
+    <section id="list-panel">
+      <table id="apps">
+        <thead>
+          <tr>
+            <th>App</th>
+            <th>Framework</th>
+            <th>Electron</th>
+            <th>Chromium</th>
+            <th>Node</th>
+            <th>Tauri</th>
+            <th>CEF</th>
+            <th>Risk</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="detail-panel" hidden>
+      <header>
+        <h2 id="detail-name">—</h2>
+        <button id="export-detail" type="button" title="Export this app's full dossier as JSON">Export</button>
+        <button id="close-detail" type="button">&times;</button>
+      </header>
+      <div id="detail-body"></div>
+    </section>
+  </main>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

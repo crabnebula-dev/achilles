@@ -1,0 +1,25 @@
+[package]
+name = "cve"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Look up known CVEs affecting detected runtime versions."
+
+[dependencies]
+detect.workspace = true
+dirs.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+
+[[example]]
+name = "lookup"
+path = "examples/lookup.rs"

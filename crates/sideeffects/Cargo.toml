@@ -1,0 +1,21 @@
+[package]
+name = "sideeffects"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Detect system-level side effects a macOS app leaves outside its bundle: helpers, XPC services, native-messaging hosts, launch agents."
+
+[dependencies]
+plist.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+
+[[example]]
+name = "sideeffects"
+path = "examples/sideeffects.rs"

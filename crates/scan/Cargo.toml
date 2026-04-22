@@ -1,0 +1,23 @@
+[package]
+name = "scan"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Discover installed .app bundles and run detection, streaming results."
+
+[dependencies]
+detect.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[example]]
+name = "scan"
+path = "examples/scan.rs"

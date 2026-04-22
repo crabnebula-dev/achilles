@@ -1,0 +1,23 @@
+[package]
+name = "macho-audit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Audit a macOS .app bundle for entitlements, signing, and ASAR integrity."
+
+[dependencies]
+plist.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+
+[[example]]
+name = "audit"
+path = "examples/audit.rs"
