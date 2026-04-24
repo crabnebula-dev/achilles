@@ -26,6 +26,7 @@ pub fn run() {
             commands::journal_list,
             commands::journal_path,
             commands::sideeffects,
+            commands::set_zoom,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

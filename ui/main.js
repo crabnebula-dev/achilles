@@ -821,6 +821,50 @@ listen("scan_event", ({ payload }) => {
   }
 });
 
+// ---------- zoom shortcuts (Cmd+= / Cmd+- / Cmd+0) ----------
+// Session-only for now — no persistence. Tauri's WebviewWindow::set_zoom
+// handles pixel alignment natively; we just track the current factor here
+// so the keystrokes stay snappy and we can clamp.
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3.0;
+const ZOOM_STEP = 0.1;
+let currentZoom = 1.0;
+
+function clampZoom(n) {
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(n * 100) / 100));
+}
+
+async function setZoom(factor) {
+  const next = clampZoom(factor);
+  if (Math.abs(next - currentZoom) < 1e-6) return;
+  currentZoom = next;
+  try {
+    await invoke("set_zoom", { factor: next });
+  } catch (err) {
+    console.warn("set_zoom failed", err);
+    return;
+  }
+  setStatus(`zoom ${Math.round(next * 100)}%`);
+}
+
+document.addEventListener("keydown", (e) => {
+  // Only respond to Cmd on macOS (metaKey); ignore on any non-apple platform
+  // by falling through when the webview's window doesn't report metaKey.
+  if (!e.metaKey) return;
+
+  // Keyboard `key` for shift+'=' is '+' on US layout; accept both.
+  if (e.key === "=" || e.key === "+") {
+    e.preventDefault();
+    void setZoom(currentZoom + ZOOM_STEP);
+  } else if (e.key === "-" || e.key === "_") {
+    e.preventDefault();
+    void setZoom(currentZoom - ZOOM_STEP);
+  } else if (e.key === "0") {
+    e.preventDefault();
+    void setZoom(1.0);
+  }
+});
+
 async function startScan() {
   seenCount = 0;
   expectedTotal = 0;

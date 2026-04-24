@@ -206,6 +206,16 @@ pub async fn journal_path() -> Option<String> {
     crate::journal::root_display()
 }
 
+// ---------- zoom ----------------------------------------------------
+
+/// Set the webview's zoom factor. Used by the frontend's Cmd+=/Cmd+-/Cmd+0
+/// handler to scale the entire UI — not just text. Clamping is enforced on
+/// the frontend so this stays a dumb pass-through.
+#[tauri::command]
+pub async fn set_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), String> {
+    window.set_zoom(factor).map_err(|e| e.to_string())
+}
+
 /// Tauri has trouble deserialising types that live in other crates when
 /// those crates aren't also serde users with the right feature set. Using a
 /// thin local DTO sidesteps that; it's a structural copy of
