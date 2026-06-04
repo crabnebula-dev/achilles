@@ -1,0 +1,153 @@
+name: Publish
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CN_APPLICATION: "crabnebula/achilles"
+
+jobs:
+  draft:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: create draft release
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release draft ${{ env.CN_APPLICATION }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+
+  build:
+    needs: draft
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: "macos-latest" # for Arm based macs (M1 and above).
+            target: "aarch64-apple-darwin"
+          - os: "macos-15-intel" # for Intel based macs.
+            target: "x86_64-apple-darwin"
+          - os: "ubuntu-22.04"
+          - os: "windows-latest"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y webkit2gtk-4.1 libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-go@v5
+        if: matrix.os == 'windows-latest'
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - id: cache-relic
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: .go/bin
+          key: relic-8.2.0
+
+      - name: install relic to codesign app
+        if: matrix.os == 'windows-latest' && steps.cache-relic.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .go/bin
+          # GOBIN must be an absolute path
+          export GOBIN=$(realpath .go/bin)
+          go install github.com/sassoftware/relic/v8@v8.2.0
+        shell: bash
+
+      - name: add relic to PATH
+        if: matrix.os == 'windows-latest'
+        run: echo "$(realpath .go/bin)" >> $GITHUB_PATH
+        shell: bash
+
+      - name: test relic
+        if: matrix.os == 'windows-latest'
+        run: relic --version
+        shell: bash
+
+      - name: setup API key for Apple notarization
+        if: startsWith(matrix.os,'macos')
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          API_KEY_PATH=$RUNNER_TEMP/Auth_${APPLE_API_KEY_ID}.p8
+          # import API key
+          echo "$APPLE_API_KEY" > $API_KEY_PATH
+          echo "APPLE_API_KEY_PATH=$API_KEY_PATH" >> $GITHUB_ENV
+
+      - name: build Tauri app for Windows
+        if: matrix.os == 'windows-latest'
+        run: cargo tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        shell: bash
+
+      - name: build Tauri app for Linux
+        if: matrix.os == 'ubuntu-22.04'
+        run: cargo tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: build Tauri app for macOS
+        if: startsWith(matrix.os,'macos')
+        run: cargo tauri build --target ${{ matrix.target }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+
+      - name: upload assets
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+
+  publish:
+    needs: [build]
+
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: publish release
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release publish ${{ env.CN_APPLICATION }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}

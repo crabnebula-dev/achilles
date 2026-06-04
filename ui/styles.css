@@ -56,6 +56,28 @@ button {
 
 button:hover { border-color: var(--accent); }
 
+button:disabled { opacity: 0.5; cursor: default; }
+button:disabled:hover { border-color: transparent; }
+
+#update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--accent);
+  font-size: 12px;
+}
+
+#update-banner[hidden] { display: none; }
+
+#update-text {
+  flex: 1;
+  color: var(--fg);
+}
+
+#update-install { border-color: var(--accent); }
+
 main {
   display: grid;
   grid-template-columns: 1fr;
