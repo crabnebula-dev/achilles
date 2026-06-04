@@ -876,4 +876,72 @@ async function startScan() {
   }
 }
 
+// ---------- auto-update (CrabNebula Cloud) ----------
+// Checks the configured updater endpoint on boot. If a newer release is found
+// we surface a banner; installing downloads + swaps the bundle and relaunches.
+const updater = window.__TAURI__.updater;
+const { relaunch } = window.__TAURI__.process;
+
+const updateBanner = document.querySelector("#update-banner");
+const updateText = document.querySelector("#update-text");
+const updateInstallBtn = document.querySelector("#update-install");
+const updateDismissBtn = document.querySelector("#update-dismiss");
+
+let pendingUpdate = null;
+
+async function checkForUpdates() {
+  if (!updater?.check) return; // plugin unavailable (e.g. running without globals)
+  let update;
+  try {
+    update = await updater.check();
+  } catch (err) {
+    console.warn("update check failed", err);
+    return;
+  }
+  if (!update?.available) return;
+  pendingUpdate = update;
+  updateText.textContent = `Achilles ${update.version} is available.`;
+  updateBanner.hidden = false;
+}
+
+async function installUpdate() {
+  if (!pendingUpdate) return;
+  updateInstallBtn.disabled = true;
+  updateDismissBtn.disabled = true;
+  try {
+    let downloaded = 0;
+    let total = 0;
+    await pendingUpdate.downloadAndInstall((event) => {
+      switch (event.event) {
+        case "Started":
+          total = event.data.contentLength ?? 0;
+          updateText.textContent = "Downloading update…";
+          break;
+        case "Progress":
+          downloaded += event.data.chunkLength ?? 0;
+          updateText.textContent = total
+            ? `Downloading update… ${Math.round((downloaded / total) * 100)}%`
+            : "Downloading update…";
+          break;
+        case "Finished":
+          updateText.textContent = "Installing… the app will restart.";
+          break;
+      }
+    });
+    await relaunch();
+  } catch (err) {
+    console.error("update install failed", err);
+    updateText.textContent = `Update failed: ${err}`;
+    updateInstallBtn.disabled = false;
+    updateDismissBtn.disabled = false;
+  }
+}
+
+updateInstallBtn.addEventListener("click", () => void installUpdate());
+updateDismissBtn.addEventListener("click", () => {
+  updateBanner.hidden = true;
+  pendingUpdate = null;
+});
+
 startScan();
+void checkForUpdates();
