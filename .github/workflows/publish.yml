@@ -76,14 +76,17 @@ jobs:
         if: matrix.os == 'windows-latest' && steps.cache-relic.outputs.cache-hit != 'true'
         run: |
           mkdir -p .go/bin
-          # GOBIN must be an absolute path
-          export GOBIN=$(realpath .go/bin)
+          # GOBIN must be an absolute, Windows-style path so the native `go`
+          # binary writes relic.exe where we expect ($(pwd -W) -> D:/a/.../).
+          export GOBIN="$(pwd -W)/.go/bin"
           go install github.com/sassoftware/relic/v8@v8.2.0
         shell: bash
 
       - name: add relic to PATH
         if: matrix.os == 'windows-latest'
-        run: echo "$(realpath .go/bin)" >> $GITHUB_PATH
+        # Use a Windows-style path; a bash/MSYS path (/d/a/...) is invisible to
+        # the native Tauri bundler that shells out to `relic` at sign time.
+        run: echo "$(pwd -W)/.go/bin" >> $GITHUB_PATH
         shell: bash
 
       - name: test relic
