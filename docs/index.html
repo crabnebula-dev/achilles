@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Achilles — desktop runtime &amp; CVE auditor</title>
+    <meta
+      name="description"
+      content="Achilles scans your installed apps and flags outdated runtimes, weakened entitlements, and known-CVE versions of Electron, Tauri, Chromium, Node.js, and more."
+    />
+    <meta property="og:title" content="Achilles" />
+    <meta
+      property="og:description"
+      content="A ~5 MB desktop app that audits the 100 MB Electron apps on your Mac for outdated runtimes and known CVEs."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="./favicon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="p-4">
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="#top">
+          <img src="./favicon.png" alt="" class="brand-icon" />
+          <span>Achilles</span>
+        </a>
+        <nav class="nav">
+          <a href="#detects">Detects</a>
+          <a href="#sources">Sources</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#static">Static analysis</a>
+          <a href="#privacy">Privacy</a>
+          <a
+            href="https://github.com/crabnebula-dev/achilles"
+            rel="noopener"
+            target="_blank"
+            >GitHub</a
+          >
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="wrap">
+          <p class="eyebrow">alpha · macOS</p>
+          <h1>Know what your desktop apps are really shipping.</h1>
+          <p class="lede">
+            Achilles scans your <code>/Applications</code> folder and tells you
+            which installed apps ship outdated runtimes, weakened
+            hardened-runtime entitlements, or known-CVE versions of
+            <strong>Electron, Tauri, Chromium, Node.js, Flutter, Qt, WKWebView</strong>
+            and eight other runtimes it detects — built as a ~5&nbsp;MB Tauri 2
+            app, so you can see what an alternative to the 100&nbsp;MB Electron
+            apps it audits actually looks like.
+          </p>
+
+          <!-- Download buttons (CrabNebula CDN) -->
+          <div class="downloads">
+            <a
+              data-crabnebula
+              class="crabnebula-btn"
+              rel="noopener"
+              type="button"
+              >Download for -
+            </a>
+            <div class="crabnebula-links">
+              <a data-crabnebula class="crabnebula-link" rel="noopener"
+                >Download for -</a
+              >
+              <a data-crabnebula class="crabnebula-link" rel="noopener"
+                >Download for -</a
+              >
+              <a data-crabnebula class="crabnebula-link" rel="noopener"
+                >Download for -</a
+              >
+            </div>
+            <p class="downloads-note">
+              All releases &amp; changelog:
+              <a
+                href="https://web.crabnebula.cloud/crabnebula/achilles/releases"
+                rel="noopener"
+                target="_blank"
+                >web.crabnebula.cloud/crabnebula/achilles</a
+              >
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Status callout -->
+      <section class="wrap">
+        <div class="callout">
+          <strong>Status: alpha, macOS-only.</strong> Detection is reliable
+          against the handful of apps tested (Discord, Signal, 1Password, VS
+          Code, Claude, HyperMeet, Zephyr Agency). Severity scoring is
+          deliberately simple — this is a <em>risk indicator</em> tool, not a
+          verdict.
+        </div>
+      </section>
+
+      <!-- What it detects -->
+      <section id="detects" class="wrap section">
+        <h2>What it detects</h2>
+        <p class="section-lede">
+          For every bundle in standard install locations
+          (<code>/Applications</code>, <code>/System/Applications</code>,
+          <code>~/Applications</code>) Achilles extracts:
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h3>Framework &amp; runtime versions</h3>
+            <p>
+              Identifies Electron, Tauri, NW.js, Flutter, Qt, React Native,
+              Wails, Sciter, Java, CEF, or native Cocoa — with a
+              high/medium/low confidence rating. Surfaces the precise version of
+              each detected runtime from Info.plists, the Mach-O string table,
+              or bundled <code>release</code> files.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Hardened-runtime entitlements</h3>
+            <p>
+              Flags the load-bearing ones: <code>allow-jit</code>,
+              <code>allow-unsigned-executable-memory</code>,
+              <code>disable-library-validation</code>,
+              <code>get-task-allow</code>, and more.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Code signature &amp; notarization</h3>
+            <p>
+              Signing authority chain, Team ID, hardened-runtime flag, and
+              whether the app carries a stapled notarization ticket.
+            </p>
+          </article>
+          <article class="card">
+            <h3>ASAR integrity</h3>
+            <p>
+              Compares the declared <code>ElectronAsarIntegrity</code> hash
+              against the actual hash of <code>app.asar</code> and tells you
+              whether the archive was modified after signing.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Runtime CVEs</h3>
+            <p>
+              Every detected runtime is checked against four user-toggleable
+              vulnerability feeds, with a max-age filter to keep wide-net CPEs
+              (Safari, Java, Qt) from returning decades of history. See
+              <a href="#sources">sources</a> below.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Bundled-dependency CVEs</h3>
+            <p>
+              Reads <code>package-lock.json</code> from inside the app's
+              <code>app.asar</code> and runs a batched OSV query across every
+              <code>(name, version)</code> pair it finds.
+            </p>
+          </article>
+          <article class="card">
+            <h3>System side effects</h3>
+            <p>
+              Enumerates what an app installs <em>outside</em> its bundle:
+              browser native-messaging-host bridges,
+              <code>launchd</code> agents/daemons, helper XPC services, and log
+              directories.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Static analysis</h3>
+            <p>
+              An AST-driven rule engine reads <code>app.asar</code> directly and
+              flags insecure Electron configuration
+              (<code>nodeIntegration</code>, missing CSP, disabled sandbox, …).
+              See <a href="#static">static analysis</a>.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Sources -->
+      <section id="sources" class="wrap section">
+        <h2>CVE sources</h2>
+        <p class="section-lede">
+          Achilles leads with
+          <a href="https://euvd.enisa.europa.eu/" rel="noopener" target="_blank"
+            >ENISA's EUVD</a
+          >
+          — the European Vulnerability Database — because EU-CNA advisories
+          don't always make it into US-centric feeds in time. OSV and NVD are
+          queried alongside for the runtime-specific coverage they do best. All
+          four are configurable from the in-app Settings dialog.
+        </p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Default</th>
+                <th>Scope</th>
+                <th>Auth</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <a
+                    href="https://euvd.enisa.europa.eu/"
+                    rel="noopener"
+                    target="_blank"
+                    >EUVD</a
+                  >
+                </td>
+                <td><span class="pill on">on (primary)</span></td>
+                <td>ENISA EU-CNA feed — vendor/product search, every runtime</td>
+                <td>none</td>
+              </tr>
+              <tr>
+                <td>
+                  <a href="https://osv.dev" rel="noopener" target="_blank"
+                    >OSV</a
+                  >
+                </td>
+                <td><span class="pill on">on</span></td>
+                <td>Electron (npm), Tauri (crates.io), bundled npm deps</td>
+                <td>none</td>
+              </tr>
+              <tr>
+                <td>
+                  <a
+                    href="https://nvd.nist.gov/developers/vulnerabilities"
+                    rel="noopener"
+                    target="_blank"
+                    >NVD</a
+                  >
+                </td>
+                <td><span class="pill on">on</span></td>
+                <td>Chromium, Node.js, Flutter, Qt, NW.js, Java/JDK, WebKit — by CPE</td>
+                <td>optional API key</td>
+              </tr>
+              <tr>
+                <td>
+                  <a
+                    href="https://docs.github.com/en/rest/security-advisories/global-advisories"
+                    rel="noopener"
+                    target="_blank"
+                    >GHSA</a
+                  >
+                </td>
+                <td><span class="pill off">off</span></td>
+                <td>GitHub Global Security Advisories — npm/rust/go</td>
+                <td>PAT required</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="fineprint">
+          Results are cached on disk for 24 hours in
+          <code>~/Library/Caches/achilles/cve/</code>. Historical CVE data is
+          immutable once published, so repeat scans only pay for newly-seen
+          versions.
+        </p>
+      </section>
+
+      <!-- Architecture -->
+      <section id="architecture" class="wrap section">
+        <h2>Architecture</h2>
+        <p class="section-lede">
+          A vanilla-JS UI over a Tauri 2 core, with each capability in its own
+          isolated Rust crate. Every crate ships an <code>examples/</code>
+          binary so you can exercise it from the command line.
+        </p>
+        <pre class="diagram">
+┌─ ui/ ────────────────────────────────┐   vanilla JS, no bundler
+│  index.html + main.js + styles.css   │   listens on scan_event,
+└────────────────┬─────────────────────┘   calls invoke() per row click
+                 │
+┌─ src-tauri/ ───▼─────────────────────┐
+│  Tauri 2 app — commands::{discover,  │
+│  scan, detect_one, audit, cve_lookup,│
+│  static_scan, dependency_scan}       │
+└─┬────────────────────────────────────┘
+  ├─ crates/detect        framework + version extraction (Mach-O scan)
+  ├─ crates/scan          mdfind + concurrent detect(), streams events
+  ├─ crates/cve           EUVD + OSV + NVD + GHSA client with disk cache
+  ├─ crates/macho-audit   entitlements / codesign / Info.plist / ASAR
+  ├─ crates/static-scan   ASAR reader + oxc AST rule engine
+  └─ crates/sideeffects   out-of-bundle installs: bridges, launch agents</pre>
+      </section>
+
+      <!-- Static analysis -->
+      <section id="static" class="wrap section">
+        <h2>Static analysis</h2>
+        <p class="section-lede">
+          The <code>static-scan</code> crate reads
+          <code>Contents/Resources/app.asar</code> directly — no extraction, no
+          external runtime — and runs an
+          <a href="https://oxc.rs" rel="noopener" target="_blank">oxc</a>-driven
+          AST rule set against every JS/TS/HTML file. Boolean checks handle
+          minified forms (<code>sandbox: !1</code>) out of the box. Rule IDs
+          mirror
+          <a
+            href="https://github.com/doyensec/electronegativity"
+            rel="noopener"
+            target="_blank"
+            >Electronegativity</a
+          >
+          so findings stay portable.
+        </p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Severity</th>
+                <th>Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><code>CONTEXT_ISOLATION_JS_CHECK</code></td><td><span class="pill bad">Critical</span></td><td>Firm</td></tr>
+              <tr><td><code>CSP_GLOBAL_CHECK</code></td><td><span class="pill warn">High</span></td><td>Firm</td></tr>
+              <tr><td><code>SANDBOX_JS_CHECK</code></td><td><span class="pill warn">High</span></td><td>Firm</td></tr>
+              <tr><td><code>NODE_INTEGRATION_JS_CHECK</code></td><td><span class="pill warn">High</span></td><td>Firm</td></tr>
+              <tr><td><code>WEB_SECURITY_JS_CHECK</code></td><td><span class="pill warn">High</span></td><td>Firm</td></tr>
+              <tr><td><code>ALLOW_RUNNING_INSECURE_CONTENT_JS_CHECK</code></td><td><span class="pill warn">High</span></td><td>Firm</td></tr>
+              <tr><td><code>EXPERIMENTAL_FEATURES_JS_CHECK</code></td><td><span class="pill mid">Medium</span></td><td>Firm</td></tr>
+              <tr><td><code>OPEN_EXTERNAL_JS_CHECK</code></td><td><span class="pill mid">Medium</span></td><td>Tentative</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Quickstart -->
+      <section id="quickstart" class="wrap section">
+        <h2>Build from source</h2>
+        <p class="section-lede">
+          Requirements: Rust 1.80+, macOS 12+. The GUI needs nothing else to
+          run.
+        </p>
+        <pre class="code"># launch the desktop app (auto-scans on open)
+cargo run -p achilles
+
+# or exercise a single crate from the CLI
+cargo run -p detect      --example detect      -- "/Applications/Signal.app"
+cargo run -p cve         --example lookup      -- electron 40.4.1 npm
+cargo run -p static-scan --example static-scan -- \
+  "/Applications/Signal.app/Contents/Resources/app.asar"</pre>
+      </section>
+
+      <!-- Privacy / non-goals -->
+      <section id="privacy" class="wrap section">
+        <h2>Privacy &amp; non-goals</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>No telemetry</h3>
+            <p>
+              Scanning happens entirely locally. CVE lookups hit the feeds
+              directly by version string — nothing about your installed apps is
+              transmitted. This is a design commitment, not just a current gap.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Not a verdict tool</h3>
+            <p>
+              The output is risk signals, not "this app is compromised." A
+              phrase like "unsafe" never appears in the UI on purpose.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Not a vendor-triage replacement</h3>
+            <p>
+              If an advisory fires on an app you care about, read the upstream
+              changelog before concluding anything.
+            </p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <p>
+          Built by Daniel Thompson-Yvetot at
+          <a href="https://crabnebula.dev" rel="noopener" target="_blank"
+            >crabnebula.dev</a
+          >. Licensed
+          <a
+            href="https://github.com/crabnebula-dev/achilles/blob/main/LICENSE"
+            rel="noopener"
+            target="_blank"
+            >PolyForm Noncommercial 1.0.0</a
+          >.
+        </p>
+        <p>
+          <a
+            href="https://github.com/crabnebula-dev/achilles"
+            rel="noopener"
+            target="_blank"
+            >Source on GitHub</a
+          >
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      function highlightUserOSButton() {
+        const os = getOs();
+        const downloadButtons = [
+          { os: "Windows", href: "https://cdn.crabnebula.app/download/crabnebula/achilles/latest/platform/nsis-x86_64", isFirst: os === "windows" },
+          { os: "Linux", href: "https://cdn.crabnebula.app/download/crabnebula/achilles/latest/platform/appimage-x86_64", isFirst: os === "linux" },
+          { os: "MacOS (intel)", href: "https://cdn.crabnebula.app/download/crabnebula/achilles/latest/platform/dmg-x86_64", isFirst: os === "macos-intel" },
+          { os: "MacOS (arm)", href: "https://cdn.crabnebula.app/download/crabnebula/achilles/latest/platform/dmg-aarch64", isFirst: os === "macos-arm" }
+        ].sort((a, b) => (a.isFirst ? -1 : 1));
+
+        document.querySelectorAll("[data-crabnebula]").forEach(($link, i) => {
+          if (
+            $link instanceof HTMLAnchorElement &&
+            i < downloadButtons.length
+          ) {
+            $link.innerHTML = `Download for ${downloadButtons[i].os}`;
+            $link.href = downloadButtons[i].href;
+          }
+        });
+      }
+
+      function getOs() {
+        const ua = navigator.userAgent;
+        if (ua.includes("Windows")) return "windows";
+        if (ua.includes("Linux")) return "linux";
+        if (ua.includes("Macintosh")) {
+          try {
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("webgl");
+            const debugInfo = ctx.getExtension("WEBGL_debug_renderer_info");
+            const renderer = ctx.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+            return renderer.match(/(M1|M2|M3)/gm) ? "macos-arm" : "macos-intel";
+          } catch {
+            return "macos-intel";
+          }
+        }
+
+        return "unknown";
+      }
+
+      highlightUserOSButton();
+    </script>
+  </body>
+</html>

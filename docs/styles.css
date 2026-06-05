@@ -1,0 +1,345 @@
+:root {
+  color-scheme: dark;
+  --bg: #141018;
+  --bg-2: #1c1824;
+  --bg-3: #2a2434;
+  --fg: #e8e4ef;
+  --fg-2: #a39caf;
+  --accent: #cba6ff;
+  --ok: #74e0a3;
+  --warn: #ffd36b;
+  --bad: #ff6b8b;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  --maxw: 1000px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.65 system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Override the inline p-4 utility from the snippet so the layout breathes. */
+body.p-4 {
+  padding: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--bg-3);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  color: var(--fg);
+}
+
+.wrap {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ---------- header ---------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(20, 16, 24, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--bg-3);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.brand:hover {
+  text-decoration: none;
+}
+.brand-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.nav {
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+}
+.nav a {
+  color: var(--fg-2);
+}
+.nav a:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* ---------- hero ---------- */
+.hero {
+  padding: 80px 0 56px;
+  background:
+    radial-gradient(60% 120% at 50% -10%, rgba(203, 166, 255, 0.14), transparent 70%),
+    var(--bg);
+  border-bottom: 1px solid var(--bg-3);
+}
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 12px;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+.hero h1 {
+  font-size: clamp(32px, 5vw, 52px);
+  line-height: 1.1;
+  margin: 0 0 20px;
+  max-width: 16ch;
+  background: linear-gradient(180deg, var(--fg), var(--fg-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.lede {
+  font-size: 18px;
+  color: var(--fg-2);
+  max-width: 62ch;
+  margin: 0 0 36px;
+}
+.lede strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ---------- downloads ---------- */
+.downloads {
+  margin-top: 8px;
+}
+.crabnebula-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #1a1320;
+  font-weight: 650;
+  font-size: 16px;
+  padding: 12px 22px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.crabnebula-btn:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(203, 166, 255, 0.3);
+}
+.crabnebula-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 16px;
+}
+.crabnebula-link {
+  font-size: 14px;
+  color: var(--fg-2);
+  border-bottom: 1px dashed var(--bg-3);
+  padding-bottom: 2px;
+}
+.crabnebula-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  text-decoration: none;
+}
+.downloads-note {
+  margin-top: 22px;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+/* ---------- callout ---------- */
+.callout {
+  margin: 36px auto 0;
+  padding: 16px 20px;
+  background: var(--bg-2);
+  border: 1px solid var(--bg-3);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  font-size: 15px;
+  color: var(--fg-2);
+}
+.callout strong {
+  color: var(--fg);
+}
+
+/* ---------- sections ---------- */
+.section {
+  padding: 56px 24px;
+}
+.section h2 {
+  font-size: 28px;
+  margin: 0 0 12px;
+}
+.section-lede {
+  color: var(--fg-2);
+  max-width: 70ch;
+  margin: 0 0 28px;
+}
+.fineprint {
+  color: var(--fg-2);
+  font-size: 14px;
+  margin-top: 16px;
+}
+
+/* ---------- card grid ---------- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--bg-3);
+  border-radius: 10px;
+  padding: 20px;
+  transition: border-color 0.15s ease;
+}
+.card:hover {
+  border-color: var(--accent);
+}
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--accent);
+}
+.card p {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--fg-2);
+}
+
+/* ---------- tables ---------- */
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--bg-3);
+  border-radius: 10px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+thead th {
+  text-align: left;
+  background: var(--bg-3);
+  color: var(--fg);
+  font-weight: 600;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+tbody td {
+  padding: 10px 14px;
+  border-top: 1px solid var(--bg-3);
+  color: var(--fg-2);
+}
+tbody tr:nth-child(even) {
+  background: var(--bg-2);
+}
+
+/* ---------- pills ---------- */
+.pill {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill.on {
+  background: rgba(116, 224, 163, 0.16);
+  color: var(--ok);
+}
+.pill.off {
+  background: var(--bg-3);
+  color: var(--fg-2);
+}
+.pill.bad {
+  background: rgba(255, 107, 139, 0.16);
+  color: var(--bad);
+}
+.pill.warn {
+  background: rgba(255, 211, 107, 0.16);
+  color: var(--warn);
+}
+.pill.mid {
+  background: rgba(203, 166, 255, 0.16);
+  color: var(--accent);
+}
+
+/* ---------- code & diagram ---------- */
+.code,
+.diagram {
+  background: var(--bg-2);
+  border: 1px solid var(--bg-3);
+  border-radius: 10px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.diagram {
+  color: var(--fg-2);
+}
+
+/* ---------- footer ---------- */
+.site-footer {
+  border-top: 1px solid var(--bg-3);
+  padding: 32px 24px;
+  margin-top: 32px;
+}
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--fg-2);
+  font-size: 14px;
+}
+.footer-inner p {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .nav {
+    display: none;
+  }
+  .hero {
+    padding: 56px 0 40px;
+  }
+}

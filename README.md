@@ -5,6 +5,9 @@ installed apps ship outdated runtimes, weakened hardened-runtime entitlements,
 or known-CVE versions of Electron, Tauri, Chromium, Node.js, Flutter, Qt,
 WKWebView, and eight other runtimes it detects.
 
+## Download
+> https://web.crabnebula.cloud/crabnebula/achilles/releases
+
 **Achilles leads with [ENISA's EUVD][EUVD]** — the European Vulnerability
 Database — as its primary feed, because EU-CNA advisories don't always make
 it into the US-centric NVD or GitHub sources in time (or at all). OSV and
@@ -297,3 +300,6 @@ the software as part of a commercial product or service requires a
 separate licence from the authors.
 
 SPDX identifier: `PolyForm-Noncommercial-1.0.0`.
+
+## Project Credit
+This was built by Daniel Thompson-Yvetot at https://crabnebula.dev 
