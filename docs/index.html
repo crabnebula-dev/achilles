@@ -436,7 +436,7 @@ cargo run -p static-scan --example static-scan -- \
             const ctx = canvas.getContext("webgl");
             const debugInfo = ctx.getExtension("WEBGL_debug_renderer_info");
             const renderer = ctx.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
-            return renderer.match(/(M1|M2|M3)/gm) ? "macos-arm" : "macos-intel";
+            return renderer.match(/(M1|M2|M3|M4|M5|M6)/gm) ? "macos-arm" : "macos-intel";
           } catch {
             return "macos-intel";
           }
