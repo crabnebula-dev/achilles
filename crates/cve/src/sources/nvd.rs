@@ -263,29 +263,30 @@ fn match_covers_version(m: &CpeMatch, version: &str) -> bool {
         // No range: fall back to the version embedded in the CPE criteria.
         // `*` / `-` mean "any version" — conservatively treat as covered.
         return match m.criteria.as_deref().and_then(cpe_version) {
-            Some(v) if v != "*" && v != "-" => cmp_versions(version, v).is_eq(),
+            Some(v) if v != "*" && v != "-" => crate::version::cmp(version, v).is_eq(),
             _ => true,
         };
     }
 
+    use crate::version::cmp;
     use std::cmp::Ordering::{Equal, Greater, Less};
     if let Some(s) = &m.version_start_including {
-        if cmp_versions(version, s) == Less {
+        if cmp(version, s) == Less {
             return false;
         }
     }
     if let Some(s) = &m.version_start_excluding {
-        if matches!(cmp_versions(version, s), Less | Equal) {
+        if matches!(cmp(version, s), Less | Equal) {
             return false;
         }
     }
     if let Some(e) = &m.version_end_including {
-        if cmp_versions(version, e) == Greater {
+        if cmp(version, e) == Greater {
             return false;
         }
     }
     if let Some(e) = &m.version_end_excluding {
-        if matches!(cmp_versions(version, e), Greater | Equal) {
+        if matches!(cmp(version, e), Greater | Equal) {
             return false;
         }
     }
@@ -296,29 +297,6 @@ fn match_covers_version(m: &CpeMatch, version: &str) -> bool {
 /// `cpe:2.3:<part>:<vendor>:<product>:<version>:…`.
 fn cpe_version(criteria: &str) -> Option<&str> {
     criteria.split(':').nth(5)
-}
-
-/// Compare two dotted-numeric version strings (e.g. Chromium's
-/// `148.0.7778.216` or Node's `20.11.1`). Neither is strict semver, so we
-/// compare component-by-component as integers, treating missing trailing
-/// components as 0 and unparseable components as 0.
-fn cmp_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering::Equal;
-    let mut ai = a.split('.');
-    let mut bi = b.split('.');
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Equal,
-            (a, b) => {
-                let av: u64 = a.unwrap_or("0").trim().parse().unwrap_or(0);
-                let bv: u64 = b.unwrap_or("0").trim().parse().unwrap_or(0);
-                match av.cmp(&bv) {
-                    Equal => continue,
-                    other => return other,
-                }
-            }
-        }
-    }
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -332,7 +310,6 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cmp::Ordering::{Equal, Greater, Less};
 
     fn end_excluding(fixed: &str) -> CpeMatch {
         CpeMatch {
@@ -343,17 +320,6 @@ mod tests {
             version_end_including: None,
             version_end_excluding: Some(fixed.into()),
         }
-    }
-
-    #[test]
-    fn cmp_chromium_four_component_versions() {
-        assert_eq!(cmp_versions("148.0.7778.216", "148.0.7778.216"), Equal);
-        assert_eq!(cmp_versions("148.0.7778.215", "148.0.7778.216"), Less);
-        assert_eq!(cmp_versions("148.0.7778.217", "148.0.7778.216"), Greater);
-        // Numeric, not lexicographic: 100 > 99.
-        assert_eq!(cmp_versions("148.0.7778.100", "148.0.7778.99"), Greater);
-        // Missing trailing components count as 0.
-        assert_eq!(cmp_versions("148.0", "148.0.0.0"), Equal);
     }
 
     #[test]

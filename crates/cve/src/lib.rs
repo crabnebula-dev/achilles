@@ -21,6 +21,7 @@ mod advisory;
 mod cache;
 mod settings;
 mod sources;
+mod version;
 
 pub use advisory::{severity_from_cvss, Advisory, Severity, Source};
 pub use settings::{
@@ -439,6 +440,7 @@ impl Client_ {
             }
         }
 
+        apply_relevance_filter(&mut report, versions);
         apply_age_filter(&mut report, self.settings.filters.max_age_years);
         report
     }
@@ -468,6 +470,69 @@ impl Client_ {
 }
 
 // ---------- filtering ----------------------------------------------------
+
+/// Drop advisories that don't actually apply to the scanned build:
+///
+///   * **already patched** — the advisory names a fix ceiling (via NVD's
+///     `fixed_in`, or "prior to X" / "before X" in the description) that the
+///     scanned version is at or past. This is what stops a runtime from being
+///     flagged by the very CVE whose fix it already ships, and it covers
+///     sources like EUVD that do only a coarse substring version match.
+///   * **wrong platform** — the advisory is explicitly scoped to a different
+///     OS ("on Android" while we audit macOS).
+///
+/// Conservative by construction: an advisory is kept whenever the version
+/// can't be parsed or no clear ceiling/scope is stated.
+fn apply_relevance_filter(report: &mut CveReport, versions: &Versions) {
+    let os = version::current_os();
+
+    // `product` is the marketing name a source's prose uses for the runtime.
+    // We only set it for Safari, where Apple's "fixed in Safari 26.5, iOS
+    // 18.7.9 …" lists pair each product with its *fixed* version. Elsewhere a
+    // product-adjacent number can be an *affected* version, so we leave it
+    // `None` and rely on the fix-semantic ceiling phrases ("prior to", …).
+    let filter = |advisories: &mut Vec<Advisory>, scanned: Option<&String>, product: Option<&str>| {
+        advisories.retain(|a| is_relevant(a, scanned, product, os));
+    };
+
+    filter(&mut report.electron, versions.electron.as_ref(), None);
+    filter(&mut report.tauri, versions.tauri.as_ref(), None);
+    filter(&mut report.node, versions.node.as_ref(), None);
+    filter(&mut report.chromium, versions.chromium.as_ref(), None);
+    filter(&mut report.flutter, versions.flutter.as_ref(), None);
+    filter(&mut report.qt, versions.qt.as_ref(), None);
+    filter(&mut report.nwjs, versions.nwjs.as_ref(), None);
+    filter(&mut report.react_native, versions.react_native.as_ref(), None);
+    filter(&mut report.wails, versions.wails.as_ref(), None);
+    filter(&mut report.sciter, versions.sciter.as_ref(), None);
+    filter(&mut report.java, versions.java.as_ref(), None);
+    filter(&mut report.webkit, versions.webkit.as_ref(), Some("Safari"));
+}
+
+/// Decide whether a single advisory applies to `scanned` version on `os`.
+fn is_relevant(
+    advisory: &Advisory,
+    scanned: Option<&String>,
+    product: Option<&str>,
+    os: version::Os,
+) -> bool {
+    if version::scoped_to_other_os(&advisory.summary, os) {
+        return false;
+    }
+    let Some(scanned) = scanned else {
+        return true; // no version to compare against — keep
+    };
+    // A fix ceiling can come from the structured `fixed_in` field or from the
+    // prose. If the scanned build is at or past it, the build is patched.
+    let ceiling = advisory
+        .fixed_in
+        .clone()
+        .or_else(|| version::fixed_ceiling_from_text(&advisory.summary, product));
+    match ceiling {
+        Some(c) => !version::at_or_above(scanned, &c),
+        None => true,
+    }
+}
 
 /// Strip advisories older than `max_age_years` years. `None` is a no-op.
 ///
@@ -581,6 +646,27 @@ mod tests {
             .iter()
             .any(|a| a.published.as_deref() == Some("2023-01-01T00:00:00Z")));
         assert!(report.chromium.iter().any(|a| a.published.is_none()));
+    }
+
+    #[test]
+    fn safari_advisory_dropped_when_already_patched() {
+        let summary = "The issue was addressed with improved memory handling. This issue is fixed in Safari 26.5, iOS 18.7.9 and iPadOS 18.7.9, iOS 26.5 and iPadOS 26.5, macOS Tahoe 26.5, tvOS 26.5, visionOS 26.5, watchOS 26.5. Processing maliciously crafted web content may lead to an unexpected process crash.";
+        let advisory = Advisory {
+            id: "CVE-2026-28847".into(),
+            source: Source::Nvd,
+            summary: summary.into(),
+            severity: Some(Severity::High),
+            fixed_in: None,
+            aliases: vec![],
+            published: Some("2026-01-01T00:00:00Z".into()),
+            references: vec![],
+        };
+        let scanned = "26.5".to_string();
+        // On macOS, running Safari 26.5: the fix is already shipped ⇒ drop.
+        assert!(!is_relevant(&advisory, Some(&scanned), Some("Safari"), version::Os::Macos));
+        // An older Safari is genuinely affected ⇒ keep.
+        let old = "18.4".to_string();
+        assert!(is_relevant(&advisory, Some(&old), Some("Safari"), version::Os::Macos));
     }
 
     #[test]
