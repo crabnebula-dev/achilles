@@ -304,3 +304,6 @@ SPDX identifier: `PolyForm-Noncommercial-1.0.0`.
 
 ## Project Credit
 This was built by Daniel Thompson-Yvetot at https://crabnebula.dev 
+
+## Catalogued and Archived at Software Heritage
+[![SWH](https://archive.softwareheritage.org/badge/origin/https://github.com/crabnebula-dev/achilles/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/crabnebula-dev/achilles) [![SWH](https://archive.softwareheritage.org/badge/swh:1:dir:d0617676804f16abd073b7ff6f5cd816a11a18e7/)](https://archive.softwareheritage.org/swh:1:dir:d0617676804f16abd073b7ff6f5cd816a11a18e7;origin=https://github.com/crabnebula-dev/achilles;visit=swh:1:snp:d31787df5d6ccd095e362bfa60a13b538b47d57b;anchor=swh:1:rev:e18f3d3452fccee867bd86babb70e40cc61c6fd6)
