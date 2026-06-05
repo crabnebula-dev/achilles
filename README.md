@@ -5,7 +5,8 @@ installed apps ship outdated runtimes, weakened hardened-runtime entitlements,
 or known-CVE versions of Electron, Tauri, Chromium, Node.js, Flutter, Qt,
 WKWebView, and eight other runtimes it detects.
 
-## Download
+## Download the Beta - for Free!!!
+
 > https://web.crabnebula.cloud/crabnebula/achilles/releases
 
 **Achilles leads with [ENISA's EUVD][EUVD]** — the European Vulnerability
