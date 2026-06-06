@@ -159,14 +159,8 @@ impl Client_ {
                 }
             }
             if s.ghsa.enabled {
-                match sources::ghsa::lookup(
-                    &self.http,
-                    s.ghsa.token.as_deref(),
-                    "rust",
-                    "tauri",
-                    v,
-                )
-                .await
+                match sources::ghsa::lookup(&self.http, s.ghsa.token.as_deref(), "rust", "tauri", v)
+                    .await
                 {
                     Ok(advisories) => report.tauri.extend(advisories),
                     Err(err) => report.errors.push(format!("[ghsa] tauri {v}: {err}")),
@@ -307,17 +301,13 @@ impl Client_ {
                 .await
                 {
                     Ok(advisories) => report.react_native.extend(advisories),
-                    Err(err) => report
-                        .errors
-                        .push(format!("[nvd] react-native {v}: {err}")),
+                    Err(err) => report.errors.push(format!("[nvd] react-native {v}: {err}")),
                 }
             }
             if s.osv.enabled {
                 match sources::osv::lookup(&self.http, "npm", "react-native", v).await {
                     Ok(advisories) => report.react_native.extend(advisories),
-                    Err(err) => report
-                        .errors
-                        .push(format!("[osv] react-native {v}: {err}")),
+                    Err(err) => report.errors.push(format!("[osv] react-native {v}: {err}")),
                 }
             }
             if s.ghsa.enabled {
@@ -457,10 +447,7 @@ impl Client_ {
 
     /// Batch-check a list of bundled npm packages against OSV. Preserves input
     /// order; empty advisories lists mean "no known CVE for that version."
-    pub async fn batch_npm(
-        &self,
-        deps: &[NpmPackage],
-    ) -> Result<Vec<NpmPackageAdvisories>, Error> {
+    pub async fn batch_npm(&self, deps: &[NpmPackage]) -> Result<Vec<NpmPackageAdvisories>, Error> {
         sources::osv::batch_npm(&self.http, deps).await
     }
 
@@ -491,9 +478,10 @@ fn apply_relevance_filter(report: &mut CveReport, versions: &Versions) {
     // 18.7.9 …" lists pair each product with its *fixed* version. Elsewhere a
     // product-adjacent number can be an *affected* version, so we leave it
     // `None` and rely on the fix-semantic ceiling phrases ("prior to", …).
-    let filter = |advisories: &mut Vec<Advisory>, scanned: Option<&String>, product: Option<&str>| {
-        advisories.retain(|a| is_relevant(a, scanned, product, os));
-    };
+    let filter =
+        |advisories: &mut Vec<Advisory>, scanned: Option<&String>, product: Option<&str>| {
+            advisories.retain(|a| is_relevant(a, scanned, product, os));
+        };
 
     filter(&mut report.electron, versions.electron.as_ref(), None);
     filter(&mut report.tauri, versions.tauri.as_ref(), None);
@@ -502,7 +490,11 @@ fn apply_relevance_filter(report: &mut CveReport, versions: &Versions) {
     filter(&mut report.flutter, versions.flutter.as_ref(), None);
     filter(&mut report.qt, versions.qt.as_ref(), None);
     filter(&mut report.nwjs, versions.nwjs.as_ref(), None);
-    filter(&mut report.react_native, versions.react_native.as_ref(), None);
+    filter(
+        &mut report.react_native,
+        versions.react_native.as_ref(),
+        None,
+    );
     filter(&mut report.wails, versions.wails.as_ref(), None);
     filter(&mut report.sciter, versions.sciter.as_ref(), None);
     filter(&mut report.java, versions.java.as_ref(), None);
@@ -566,10 +558,7 @@ fn apply_age_filter(report: &mut CveReport, max_age_years: Option<u32>) {
 }
 
 /// Same filter applied to npm-dep advisory lists from [`Client_::batch_npm`].
-pub fn filter_npm_by_age(
-    results: &mut [NpmPackageAdvisories],
-    max_age_years: Option<u32>,
-) {
+pub fn filter_npm_by_age(results: &mut [NpmPackageAdvisories], max_age_years: Option<u32>) {
     let Some(max) = max_age_years else {
         return;
     };
@@ -663,10 +652,20 @@ mod tests {
         };
         let scanned = "26.5".to_string();
         // On macOS, running Safari 26.5: the fix is already shipped ⇒ drop.
-        assert!(!is_relevant(&advisory, Some(&scanned), Some("Safari"), version::Os::Macos));
+        assert!(!is_relevant(
+            &advisory,
+            Some(&scanned),
+            Some("Safari"),
+            version::Os::Macos
+        ));
         // An older Safari is genuinely affected ⇒ keep.
         let old = "18.4".to_string();
-        assert!(is_relevant(&advisory, Some(&old), Some("Safari"), version::Os::Macos));
+        assert!(is_relevant(
+            &advisory,
+            Some(&old),
+            Some("Safari"),
+            version::Os::Macos
+        ));
     }
 
     #[test]

@@ -1,16 +1,17 @@
 //! Tauri commands exposed to the frontend.
 //!
 //! Keep this file thin — everything heavy lives in the `detect` / `scan` /
-//! `cve` / `macho_audit` crates so it remains testable without Tauri.
+//! `cve` / `app_audit` crates so it remains testable without Tauri.
 
 use std::path::PathBuf;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-/// Enumerate `.app` bundles on the system, without running detection.
+/// Enumerate installed GUI applications on the system, without running
+/// detection.
 #[tauri::command]
-pub async fn discover() -> Result<Vec<PathBuf>, String> {
+pub async fn discover() -> Result<Vec<scan::DiscoveredApp>, String> {
     scan::discover_applications()
         .await
         .map_err(|e| e.to_string())
@@ -47,10 +48,18 @@ pub async fn detect_one(path: PathBuf) -> Result<detect::Detection, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Entitlements + code-signature + Info.plist + ASAR integrity for one app.
+/// Platform-specific signing / hardening / integrity audit for one app.
+/// `root` and `executable` come from the `Detection` so we don't re-resolve
+/// per-OS paths here.
 #[tauri::command]
-pub async fn audit(path: PathBuf) -> Result<macho_audit::MachoAudit, String> {
-    macho_audit::audit(&path).await.map_err(|e| e.to_string())
+pub async fn audit(
+    path: PathBuf,
+    root: PathBuf,
+    executable: Option<PathBuf>,
+) -> Result<app_audit::AppAudit, String> {
+    app_audit::audit(&path, &root, executable.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// System-level side effects: helpers/plugins/XPC inside the bundle,
@@ -99,22 +108,29 @@ pub async fn dependency_scan(
     Ok(results)
 }
 
-/// Run the AST-based static-analysis rules against the bundle's `app.asar`.
-/// Works on any Electron `.app` path; for non-Electron bundles returns an
-/// empty report. Heavy work — runs on a blocking thread.
+/// Run the AST-based static-analysis rules against the app's `app.asar`.
+/// Works on any Electron app; for non-Electron apps returns an empty report.
+/// `root` is the app's sibling-files dir (from `Detection`); the resources
+/// layout differs per-OS (`Contents/Resources` on macOS, `resources` else).
+/// Heavy work — runs on a blocking thread.
 #[tauri::command]
-pub async fn static_scan(path: PathBuf) -> Result<static_scan::Report, String> {
+pub async fn static_scan(root: PathBuf) -> Result<static_scan::Report, String> {
     tokio::task::spawn_blocking(move || {
-        let asar_path = path.join("Contents/Resources/app.asar");
-        let unpacked = path.join("Contents/Resources/app");
+        let resources = if cfg!(target_os = "macos") {
+            root.join("Contents/Resources")
+        } else {
+            root.join("resources")
+        };
+        let asar_path = resources.join("app.asar");
+        let unpacked = resources.join("app");
         if asar_path.is_file() {
             static_scan::scan_asar(&asar_path).map_err(|e| e.to_string())
         } else if unpacked.is_dir() {
             static_scan::scan_directory(&unpacked).map_err(|e| e.to_string())
         } else {
             Err(format!(
-                "no app.asar or Resources/app directory under {}",
-                path.display()
+                "no app.asar or resources/app directory under {}",
+                resources.display()
             ))
         }
     })

@@ -68,9 +68,8 @@ fn parse(value: plist::Value) -> Entitlements {
         return Entitlements::default();
     };
 
-    let flag = |key: &str, d: &plist::Dictionary| {
-        d.get(key).and_then(|v| v.as_boolean()).unwrap_or(false)
-    };
+    let flag =
+        |key: &str, d: &plist::Dictionary| d.get(key).and_then(|v| v.as_boolean()).unwrap_or(false);
 
     let mut raw = BTreeMap::new();
     for (k, v) in &dict {
@@ -92,10 +91,7 @@ fn parse(value: plist::Value) -> Entitlements {
             "com.apple.security.cs.allow-dyld-environment-variables",
             &dict,
         ),
-        disable_library_validation: flag(
-            "com.apple.security.cs.disable-library-validation",
-            &dict,
-        ),
+        disable_library_validation: flag("com.apple.security.cs.disable-library-validation", &dict),
         get_task_allow: flag("com.apple.security.get-task-allow", &dict),
         raw,
     }
@@ -116,11 +112,9 @@ fn plist_to_json(value: plist::Value) -> serde_json::Value {
         plist::Value::Array(a) => {
             serde_json::Value::Array(a.into_iter().map(plist_to_json).collect())
         }
-        plist::Value::Dictionary(d) => serde_json::Value::Object(
-            d.into_iter()
-                .map(|(k, v)| (k, plist_to_json(v)))
-                .collect(),
-        ),
+        plist::Value::Dictionary(d) => {
+            serde_json::Value::Object(d.into_iter().map(|(k, v)| (k, plist_to_json(v))).collect())
+        }
         plist::Value::Data(d) => serde_json::Value::String(format!("<{} bytes>", d.len())),
         plist::Value::Date(d) => serde_json::Value::String(format!("{d:?}")),
         plist::Value::Uid(u) => serde_json::Value::Number(u.get().into()),

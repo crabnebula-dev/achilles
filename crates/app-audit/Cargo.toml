@@ -1,0 +1,34 @@
+[package]
+name = "app-audit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Audit an installed app for signing, hardening, and ASAR integrity across macOS, Windows, and Linux."
+
+[dependencies]
+plist.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+# Windows / Linux parse the executable directly (PE / ELF) for hardening flags
+# and signature presence; macOS shells to `codesign` and reads Info.plist.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+goblin.workspace = true
+memchr.workspace = true
+
+# Windows additionally extracts the Authenticode signer (cms / x509-cert) and
+# verifies trust against the OS store (WinVerifyTrust).
+[target.'cfg(target_os = "windows")'.dependencies]
+cms.workspace = true
+x509-cert.workspace = true
+windows.workspace = true
+
+[[example]]
+name = "audit"
+path = "examples/audit.rs"

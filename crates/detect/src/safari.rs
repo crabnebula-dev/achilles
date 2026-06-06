@@ -39,7 +39,9 @@ pub fn detect_app(bundle_id: Option<&str>, app_path: &Path) -> Option<String> {
 /// The effective WKWebView version on this machine — Safari's Info.plist
 /// `CFBundleShortVersionString`. Memoised for the process lifetime.
 pub fn system_webkit_version() -> Option<String> {
-    SYSTEM_WEBKIT.get_or_init(locate_system_safari_version).clone()
+    SYSTEM_WEBKIT
+        .get_or_init(locate_system_safari_version)
+        .clone()
 }
 
 fn locate_system_safari_version() -> Option<String> {

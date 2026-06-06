@@ -1,8 +1,9 @@
 //! Tauri detection.
 //!
-//! Tauri apps statically link the Tauri runtime into the main Mach-O binary,
-//! so there's no "framework bundle" to look at the way Electron has. Instead
-//! we string-scan the main executable for three independent fingerprints and
+//! Tauri apps statically link the Tauri runtime into the main binary, so
+//! there's no "framework bundle" to look at the way Electron has — which is
+//! exactly why detection is identical on macOS, Windows, and Linux. We
+//! string-scan the main executable for three independent fingerprints and
 //! vote:
 //!
 //! 1. A cargo-registry debug path referencing a `tauri-*` crate with a
@@ -18,15 +19,16 @@
 
 use std::path::Path;
 
-use crate::{bundle::BundleInfo, strings, Confidence, Versions};
+use crate::app::Layout;
+use crate::{strings, Confidence, Versions};
 
 pub struct Detection {
     pub confidence: Confidence,
     pub versions: Versions,
 }
 
-pub fn detect(bundle: &BundleInfo) -> Result<Option<Detection>, crate::DetectError> {
-    let Some(exe) = bundle.executable.as_deref() else {
+pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
+    let Some(exe) = layout.executable.as_deref() else {
         return Ok(None);
     };
     if !exe.exists() {

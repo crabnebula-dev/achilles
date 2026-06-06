@@ -48,10 +48,7 @@ fn testapp_is_detected_as_electron() {
         result.versions.node.is_some(),
         "node version should be extracted"
     );
-    assert!(
-        result.bundle_id.is_some(),
-        "bundle id should be present"
-    );
+    assert!(result.bundle_id.is_some(), "bundle id should be present");
 }
 
 /// Detection should return `Unknown`, not error, on random directories.

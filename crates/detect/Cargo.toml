@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Detect Electron / Tauri frameworks and their runtime versions from .app bundles"
+description = "Detect Electron / Tauri frameworks and their runtime versions across macOS, Windows, and Linux apps"
 
 [dependencies]
 memchr.workspace = true
@@ -15,6 +15,15 @@ plist.workspace = true
 regex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+# Windows / Linux read framework markers from the binary's import table and PE
+# version resources; macOS relies on `.app` bundle layout + Info.plist instead.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+goblin.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+pelite.workspace = true
+winreg.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

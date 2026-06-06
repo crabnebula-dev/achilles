@@ -1,6 +1,6 @@
 //! `achilles` — Tauri app entry point.
 //!
-//! Wires the `detect` / `scan` / `cve` / `macho_audit` crates into five
+//! Wires the `detect` / `scan` / `cve` / `app_audit` crates into five
 //! `#[tauri::command]` functions. The frontend drives them; progress is
 //! streamed back via `app.emit("scan_event", …)`.
 

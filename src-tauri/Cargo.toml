@@ -27,6 +27,6 @@ tokio.workspace = true
 detect.workspace = true
 scan.workspace = true
 cve.workspace = true
-macho-audit.workspace = true
+app-audit.workspace = true
 static-scan.workspace = true
 sideeffects.workspace = true

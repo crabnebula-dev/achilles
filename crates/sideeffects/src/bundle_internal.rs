@@ -2,30 +2,9 @@
 //! bundle but aren't the main executable.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use serde::Serialize;
-
-/// One helper, plugin, or XPC service bundled inside the app.
-#[derive(Debug, Clone, Serialize)]
-pub struct BundleHelper {
-    /// Name of the file or subdirectory (e.g. `chrome-native-host`,
-    /// `Signal Helper.app`, `GPUProcess.xpc`).
-    pub name: String,
-    /// Absolute path.
-    pub path: PathBuf,
-    /// Total size in bytes (walks directories recursively for `.app`/`.xpc`
-    /// bundles). `None` if we hit a permission issue.
-    pub size_bytes: Option<u64>,
-    /// Bundle id, if it's an `.app` / `.xpc` we could parse an
-    /// `Info.plist` out of.
-    pub bundle_id: Option<String>,
-    /// Version string from the sub-bundle's Info.plist, if present.
-    pub version: Option<String>,
-    /// True if the entry is a `.app` or `.xpc` directory (i.e. a nested
-    /// bundle rather than a raw executable).
-    pub is_bundle: bool,
-}
+use crate::types::BundleHelper;
 
 /// List every entry directly under `app_path/rel_dir`. Nested bundles get
 /// their Info.plist read; plain executables just get a name/size/path.

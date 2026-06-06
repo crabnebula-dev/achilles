@@ -26,10 +26,7 @@ pub fn get<T: DeserializeOwned>(key: &str) -> Option<T> {
     let path = cache_path(key)?;
     let bytes = std::fs::read(&path).ok()?;
     let env: Envelope<T> = serde_json::from_slice(&bytes).ok()?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     if now.saturating_sub(env.stored_at) > DEFAULT_TTL.as_secs() {
         return None;
     }

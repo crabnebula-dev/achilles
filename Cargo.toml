@@ -25,6 +25,24 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 semver = "1"
 dirs = "6"
+# cross-platform binary parsing: ELF (Linux) + PE (Windows) headers, imports,
+# program headers for the audit + detection layers
+goblin = "0.9"
+# PE version resources + DllCharacteristics + embedded manifests (Windows)
+pelite = "0.10"
+# Windows registry access (system webview, autostart, native-messaging hosts)
+winreg = "0.52"
+# Resolve Windows Start Menu `.lnk` shortcuts during discovery (pure Rust)
+lnk = "0.5"
+# Parse the embedded Authenticode PKCS#7 to read the signer certificate
+cms = "0.2"
+x509-cert = "0.2"
+# Win32 APIs for Authenticode trust verification (WinVerifyTrust)
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_WinTrust",
+    "Win32_Security_Cryptography",
+] }
 # JS / TS AST parsing for the static-scan rules
 oxc_allocator = "0.126"
 oxc_ast = "0.126"
@@ -35,6 +53,6 @@ oxc_span = "0.126"
 detect = { path = "crates/detect" }
 scan = { path = "crates/scan" }
 cve = { path = "crates/cve" }
-macho-audit = { path = "crates/macho-audit" }
+app-audit = { path = "crates/app-audit" }
 static-scan = { path = "crates/static-scan" }
 sideeffects = { path = "crates/sideeffects" }

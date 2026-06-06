@@ -9,15 +9,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde::Serialize;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LogDirectory {
-    pub path: PathBuf,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub last_modified: Option<u64>,
-}
+use crate::types::LogDirectory;
 
 /// Probe `~/Library/Logs/` for subdirectories named after the bundle id
 /// or a best-effort slug derived from it.

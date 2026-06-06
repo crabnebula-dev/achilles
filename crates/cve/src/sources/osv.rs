@@ -110,11 +110,7 @@ pub async fn lookup(
     }
     let parsed: QueryResponse = serde_json::from_str(&text)
         .map_err(|e| Error::BadPayload(format!("osv {ecosystem}: {e}")))?;
-    let advisories: Vec<Advisory> = parsed
-        .vulns
-        .into_iter()
-        .map(to_advisory)
-        .collect();
+    let advisories: Vec<Advisory> = parsed.vulns.into_iter().map(to_advisory).collect();
 
     cache::put(&cache_key, &advisories);
     Ok(advisories)
@@ -228,11 +224,7 @@ fn to_advisory(v: Vulnerability) -> Advisory {
         .iter()
         .flat_map(|a| a.ranges.iter())
         .flat_map(|r| r.events.iter())
-        .find_map(|e| {
-            e.get("fixed")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-        });
+        .find_map(|e| e.get("fixed").and_then(|v| v.as_str()).map(str::to_owned));
     Advisory {
         id: v.id,
         source: Source::Osv,

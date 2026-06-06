@@ -1,37 +1,53 @@
-//! React Native (macOS) probe.
+//! React Native probe.
 //!
-//! RN-macOS apps typically ship one of two JS engines:
+//! RN apps ship a JS engine — usually **Hermes** — plus recognisable RN
+//! symbols in the main binary.
 //!
-//! 1. **Hermes** as a bundled framework — `Contents/Frameworks/hermes.framework/`
-//!    with a version in its Info.plist. This is the strong signal.
-//! 2. **System JavaScriptCore**, in which case there's no framework to find
-//!    and we fall back to scanning the main binary / Resources for
-//!    unmistakable RN strings (`react-native`, `RCTBridge`, `facebook/react-native`).
+//! * **macOS**: `Contents/Frameworks/hermes.framework` (strong signal, version
+//!   in its Info.plist), else a string-scan fallback (`RCTBridge`,
+//!   `facebook::react`).
+//! * **Windows**: `hermes.dll` / `Microsoft.ReactNative.dll`.
+//! * **Linux**: `libhermes.so` (or RN symbols in the binary).
 //!
-//! We prefer the Hermes framework signal when available. The string-based
-//! fallback returns a generic `"unknown"` version since there's no runtime
-//! version to read off disk — but it still lets us flag the bundle as RN.
+//! A bundled engine is the high-confidence signal; the string-scan fallback is
+//! medium. `bundled_engine` records which fired so the caller can rate it.
 
-use std::path::Path;
-
+use crate::app::Layout;
 use crate::strings;
-
-const HERMES_FRAMEWORK_REL: &str = "Contents/Frameworks/hermes.framework";
 
 pub struct Detection {
     pub version: Option<String>,
+    /// True when a bundled JS engine (Hermes framework / library) was found,
+    /// vs. only the binary-string fallback.
+    pub bundled_engine: bool,
 }
 
-pub fn detect(app_path: &Path, executable: Option<&Path>) -> Result<Option<Detection>, crate::DetectError> {
-    let hermes_dir = app_path.join(HERMES_FRAMEWORK_REL);
-    if hermes_dir.is_dir() {
-        let version = read_hermes_version(&hermes_dir).or(Some("unknown".to_string()));
-        return Ok(Some(Detection { version }));
+pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
+    #[cfg(target_os = "macos")]
+    {
+        let hermes_dir = layout.frameworks_dir().join("hermes.framework");
+        if hermes_dir.is_dir() {
+            let version = read_hermes_version(&hermes_dir).or(Some("unknown".to_string()));
+            return Ok(Some(Detection {
+                version,
+                bundled_engine: true,
+            }));
+        }
     }
 
-    // No Hermes framework — fall back to string-scanning the main executable
-    // for RN-specific symbols.
-    if let Some(exe) = executable {
+    #[cfg(not(target_os = "macos"))]
+    {
+        if layout.has_library("hermes") || layout.has_library("reactnative") {
+            return Ok(Some(Detection {
+                version: Some("unknown".to_string()),
+                bundled_engine: true,
+            }));
+        }
+    }
+
+    // Engine not bundled separately — fall back to string-scanning the main
+    // executable for RN-specific symbols.
+    if let Some(exe) = layout.executable.as_deref() {
         if exe.exists()
             && (strings::contains(exe, b"facebook::react").unwrap_or(false)
                 || strings::contains(exe, b"RCTBridge").unwrap_or(false)
@@ -39,6 +55,7 @@ pub fn detect(app_path: &Path, executable: Option<&Path>) -> Result<Option<Detec
         {
             return Ok(Some(Detection {
                 version: Some("unknown".to_string()),
+                bundled_engine: false,
             }));
         }
     }
@@ -46,11 +63,9 @@ pub fn detect(app_path: &Path, executable: Option<&Path>) -> Result<Option<Detec
     Ok(None)
 }
 
-fn read_hermes_version(framework_dir: &Path) -> Option<String> {
-    for rel in &[
-        "Versions/A/Resources/Info.plist",
-        "Resources/Info.plist",
-    ] {
+#[cfg(target_os = "macos")]
+fn read_hermes_version(framework_dir: &std::path::Path) -> Option<String> {
+    for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
         let plist = framework_dir.join(rel);
         if !plist.exists() {
             continue;

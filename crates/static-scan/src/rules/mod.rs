@@ -101,7 +101,12 @@ fn match_node_integration_true(program: &oxc_ast::ast::Program) -> Vec<AstMatch>
     run_bool_prop(program, "nodeIntegration", true, "nodeIntegration: true")
 }
 fn match_context_isolation_false(program: &oxc_ast::ast::Program) -> Vec<AstMatch> {
-    run_bool_prop(program, "contextIsolation", false, "contextIsolation: false")
+    run_bool_prop(
+        program,
+        "contextIsolation",
+        false,
+        "contextIsolation: false",
+    )
 }
 fn match_web_security_false(program: &oxc_ast::ast::Program) -> Vec<AstMatch> {
     run_bool_prop(program, "webSecurity", false, "webSecurity: false")
@@ -161,13 +166,11 @@ pub fn catalog() -> Vec<Rule> {
     vec![
         Rule {
             id: RuleId::CspGlobalCheck,
-            description:
-                "No Content-Security-Policy meta tag found in any HTML entry point. \
+            description: "No Content-Security-Policy meta tag found in any HTML entry point. \
                  Any XSS in the renderer becomes a fast path to the preload bridge.",
             severity: Severity::High,
             confidence: Confidence::Firm,
-            help_url:
-                "https://github.com/doyensec/electronegativity/wiki/CSP_GLOBAL_CHECK",
+            help_url: "https://github.com/doyensec/electronegativity/wiki/CSP_GLOBAL_CHECK",
             file_extensions: HTML_EXTS,
             matcher: Matcher::RegexAbsentFromAll {
                 pattern: &CSP_META,
@@ -176,8 +179,7 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::SandboxJsCheck,
-            description:
-                "`sandbox: false` disables the Chromium renderer sandbox. Combined \
+            description: "`sandbox: false` disables the Chromium renderer sandbox. Combined \
                  with any renderer XSS, the attacker can reach preload/Node APIs.",
             severity: Severity::High,
             confidence: Confidence::Firm,
@@ -187,8 +189,7 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::NodeIntegrationJsCheck,
-            description:
-                "`nodeIntegration: true` exposes Node.js globals (require, process) \
+            description: "`nodeIntegration: true` exposes Node.js globals (require, process) \
                  to the renderer. Any renderer XSS becomes trivial RCE.",
             severity: Severity::High,
             confidence: Confidence::Firm,
@@ -199,8 +200,7 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::ContextIsolationJsCheck,
-            description:
-                "`contextIsolation: false` merges preload and renderer JS contexts, \
+            description: "`contextIsolation: false` merges preload and renderer JS contexts, \
                  letting renderer code reach any Node API the preload pulled in.",
             severity: Severity::Critical,
             confidence: Confidence::Firm,
@@ -211,20 +211,17 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::WebSecurityJsCheck,
-            description:
-                "`webSecurity: false` disables same-origin policy in the renderer. \
+            description: "`webSecurity: false` disables same-origin policy in the renderer. \
                  Any loaded resource can read from any other origin.",
             severity: Severity::High,
             confidence: Confidence::Firm,
-            help_url:
-                "https://github.com/doyensec/electronegativity/wiki/WEB_SECURITY_JS_CHECK",
+            help_url: "https://github.com/doyensec/electronegativity/wiki/WEB_SECURITY_JS_CHECK",
             file_extensions: JS_EXTS,
             matcher: Matcher::AstJs(match_web_security_false),
         },
         Rule {
             id: RuleId::AllowRunningInsecureContentJsCheck,
-            description:
-                "`allowRunningInsecureContent: true` lets HTTP resources load into an \
+            description: "`allowRunningInsecureContent: true` lets HTTP resources load into an \
                  HTTPS renderer. Any network attacker can alter injected script.",
             severity: Severity::High,
             confidence: Confidence::Firm,
@@ -235,8 +232,7 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::ExperimentalFeaturesJsCheck,
-            description:
-                "`experimentalFeatures: true` enables Chromium features that haven't \
+            description: "`experimentalFeatures: true` enables Chromium features that haven't \
                  completed security review and may have additional attack surface.",
             severity: Severity::Medium,
             confidence: Confidence::Firm,
@@ -247,13 +243,11 @@ pub fn catalog() -> Vec<Rule> {
         },
         Rule {
             id: RuleId::OpenExternalJsCheck,
-            description:
-                "`shell.openExternal(...)` with unvalidated input can launch arbitrary \
+            description: "`shell.openExternal(...)` with unvalidated input can launch arbitrary \
                  URL handlers. Verify the URL is allowlisted before opening.",
             severity: Severity::Medium,
             confidence: Confidence::Tentative,
-            help_url:
-                "https://github.com/doyensec/electronegativity/wiki/OPEN_EXTERNAL_JS_CHECK",
+            help_url: "https://github.com/doyensec/electronegativity/wiki/OPEN_EXTERNAL_JS_CHECK",
             file_extensions: JS_EXTS,
             matcher: Matcher::AstJs(match_open_external),
         },

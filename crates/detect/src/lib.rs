@@ -1,9 +1,15 @@
-//! Framework and runtime-version detection for macOS `.app` bundles.
+//! Framework and runtime-version detection for installed applications, across
+//! macOS, Windows, and Linux.
 //!
-//! Given a path to a `.app` bundle (or any directory that looks like one),
-//! [`detect`] returns a [`Detection`] describing whether the bundle is an
-//! Electron app, a Tauri app, a plain native app, or something unrecognised,
-//! along with any runtime version strings that could be extracted.
+//! Given a [`DiscoveredApp`] (or a path, via [`detect`]), [`detect_app`]
+//! returns a [`Detection`] describing whether the app is an Electron app, a
+//! Tauri app, a plain native app, or something unrecognised, along with any
+//! runtime version strings that could be extracted.
+//!
+//! The shape on disk differs per OS — a macOS `.app` bundle vs. a Windows /
+//! Linux executable with sibling files — but the version fingerprints live as
+//! literal strings in the binary (and its import table), so most of the work is
+//! shared. The per-OS specifics are hidden behind an internal `Layout`.
 //!
 //! The detector never panics and prefers partial results over errors: if a
 //! path is malformed or a binary can't be read, the affected fields are left
@@ -11,58 +17,69 @@
 
 use std::path::{Path, PathBuf};
 
+mod app;
 mod bundle;
 mod cef;
 mod chromium_browser;
 mod electron;
 mod flutter;
 mod java;
+mod metadata;
 mod nwjs;
 mod qt;
 mod react_native;
+#[cfg(target_os = "macos")]
 mod safari;
 mod sciter;
 mod strings;
+mod system_webview;
 mod tauri;
 mod wails;
 
+pub use app::DiscoveredApp;
+use app::Layout;
 pub use bundle::BundleInfo;
 
-/// Framework class of a macOS application bundle.
+/// Framework class of an application — be it a macOS `.app` bundle, a Windows
+/// install directory, or a Linux binary plus its sibling files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Framework {
-    /// Uses `Contents/Frameworks/Electron Framework.framework`.
+    /// Electron — `Electron Framework.framework` (macOS) or a
+    /// `resources/{app,electron}.asar` + the `Electron/` UA string in the
+    /// binary (Windows / Linux).
     Electron,
-    /// Uses the Tauri Rust runtime (WKWebView on macOS by default).
+    /// Uses the Tauri Rust runtime (system webview: WKWebView / WebView2 /
+    /// WebKitGTK).
     Tauri,
-    /// Uses `Contents/Frameworks/nwjs Framework.framework`.
+    /// NW.js (`nwjs Framework.framework` / `nw.dll` / `libnw.so`).
     NwJs,
-    /// Uses `Contents/Frameworks/FlutterMacOS.framework`.
+    /// Flutter (`FlutterMacOS.framework` / `flutter_windows.dll` /
+    /// `libflutter_linux_gtk.so`).
     Flutter,
-    /// Uses Qt (`Contents/Frameworks/QtCore.framework` present).
+    /// Qt (`QtCore.framework` / `Qt{5,6}Core.dll` / `libQt{5,6}Core.so`).
     Qt,
-    /// Uses React Native for macOS (Hermes framework or JS-bundle markers).
+    /// React Native (Hermes framework / `hermes.dll` / `libhermes.so`, or
+    /// RN symbols in the binary).
     ReactNative,
-    /// Uses Wails (Go + system WKWebView).
+    /// Uses Wails (Go + system webview).
     Wails,
     /// Uses Sciter (HTML/CSS UI engine).
     Sciter,
-    /// JVM-based app (bundled JRE under `Contents/PlugIns/*.jdk/` or
-    /// similar).
+    /// JVM-based app (bundled JRE with a `release` file).
     Java,
-    /// Apple Safari itself. Distinct from ChromiumBrowser because Safari
+    /// Apple Safari itself (macOS). Distinct from ChromiumBrowser because Safari
     /// relies on system WebKit (`versions.webkit`) rather than a bundled
     /// Chromium.
     Safari,
-    /// Uses `Contents/Frameworks/Chromium Embedded Framework.framework` as
-    /// the *only* runtime signal. A CEF framework bundled alongside another
-    /// runtime doesn't demote the primary verdict — see [`Versions::cef`].
+    /// Bundles the Chromium Embedded Framework (`libcef`) as the *only* runtime
+    /// signal. CEF alongside another runtime doesn't demote the primary verdict
+    /// — see [`Versions::cef`].
     Cef,
     /// Chromium-based browser (Chrome, Arc, Brave, …). Distinct from
     /// Electron because these ship the browser shell, not an embedded app.
     ChromiumBrowser,
-    /// Native Cocoa (or other non-embedded-webview) application.
+    /// Native (non-embedded-webview) application.
     Native,
     /// Could not determine.
     Unknown,
@@ -121,10 +138,20 @@ pub struct Versions {
     pub webkit: Option<String>,
 }
 
-/// Result of running [`detect`] on one bundle.
+/// Result of running [`detect`] on one app.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Detection {
+    /// Stable identity: the `.app` dir (macOS) or primary executable
+    /// (Windows / Linux). The UI keys rows on this.
     pub path: PathBuf,
+    /// Directory holding the app's sibling runtime files. Downstream audits
+    /// (`app-audit`, `sideeffects`, `static-scan`) use it instead of
+    /// re-deriving platform paths.
+    pub root: PathBuf,
+    /// Primary executable, resolved per-OS (macOS `CFBundleExecutable`, the
+    /// real ELF behind a Linux launcher, the Windows `.exe`). `None` when no
+    /// readable executable was found.
+    pub executable: Option<PathBuf>,
     pub bundle_id: Option<String>,
     pub display_name: Option<String>,
     pub bundle_version: Option<String>,
@@ -147,40 +174,57 @@ pub enum DetectError {
     },
 }
 
-/// Inspect the bundle at `app_path` and return a best-effort [`Detection`].
+/// Inspect the application at `app_path` and return a best-effort [`Detection`].
 ///
-/// The path should point at a `.app` directory (or its equivalent). Pass a
-/// path without a `Contents/` child and the result will be `Unknown` with no
-/// versions populated — we still return `Ok(..)` rather than erroring, because
-/// the scanner wants to list every entry it walked.
+/// The path should point at a `.app` directory (macOS) or the primary
+/// executable (Windows / Linux). For richer cases — where discovery already
+/// knows the executable and display name — prefer [`detect_app`]. A path with
+/// no recognisable framework yields `Unknown` with no versions populated; we
+/// still return `Ok(..)` rather than erroring so the scanner can list every
+/// entry it walked.
 pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
-    let app_path = app_path.to_path_buf();
-    if !app_path.exists() {
-        return Err(DetectError::NotFound(app_path));
-    }
-    if !app_path.is_dir() {
-        return Err(DetectError::NotADirectory(app_path));
+    detect_app(&DiscoveredApp::from_path(app_path))
+}
+
+/// Inspect a [`DiscoveredApp`] and return a best-effort [`Detection`]. This is
+/// the entry point the scanner uses: discovery has already resolved the root,
+/// executable, and display name per-OS.
+pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
+    if !app.path.exists() {
+        return Err(DetectError::NotFound(app.path.clone()));
     }
 
-    let bundle = bundle::read(&app_path);
+    let bundle = metadata::read(app);
+    // Effective executable: discovery's, falling back to the one declared in
+    // platform metadata (macOS `CFBundleExecutable`). Must be a regular file —
+    // a directory (or a path that vanished) would crash the mmap probes — so we
+    // drop anything that isn't, leaving framework probes to skip cleanly.
+    let executable = app
+        .executable
+        .clone()
+        .or_else(|| bundle.executable.clone())
+        .filter(|p| p.is_file());
+    let layout = Layout::new(app.root.clone(), executable);
+    let identity = &app.path;
 
     // Run every secondary-signal probe upfront so we can attach their
     // version strings to whichever primary verdict wins. Each probe is
-    // cheap: a filesystem check + an Info.plist read, or a single mmap
-    // + string scan for the binary-sniff ones.
-    let cef_version = cef::detect(&app_path);
-    let flutter_version = flutter::detect(&app_path);
-    let qt_probe = qt::detect(&app_path)?;
-    let nwjs_probe = nwjs::detect(&app_path)?;
-    let rn_probe = react_native::detect(&app_path, bundle.executable.as_deref())?;
-    let wails_version = match bundle.executable.as_deref() {
+    // cheap: a filesystem / import-table check, or a single mmap + string
+    // scan for the binary-sniff ones.
+    let cef_version = cef::detect(&layout);
+    let flutter_version = flutter::detect(&layout);
+    let qt_probe = qt::detect(&layout)?;
+    let nwjs_probe = nwjs::detect(&layout)?;
+    let rn_probe = react_native::detect(&layout)?;
+    let wails_version = match layout.executable.as_deref() {
         Some(exe) => wails::detect(exe)?,
         None => None,
     };
-    let sciter_version = sciter::detect(&app_path)?;
-    let java_probe = java::detect(&app_path, bundle.executable.as_deref());
-    // System WKWebView version, memoised across all apps in a scan.
-    let system_webkit = safari::system_webkit_version();
+    let sciter_version = sciter::detect(&layout)?;
+    let java_probe = java::detect(&layout);
+    // Effective system webview engine version (macOS WKWebView / Windows
+    // WebView2 / Linux WebKitGTK), memoised across all apps in a scan.
+    let system_webview = system_webview::detect();
 
     let mut extra_versions = Versions {
         cef: cef_version.clone(),
@@ -201,10 +245,11 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
     };
 
     // Electron is the highest-signal primary verdict.
-    if let Some(result) = electron::detect(&app_path)? {
+    if let Some(result) = electron::detect(&layout)? {
         let versions = merge_versions(result.versions, &extra_versions);
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Electron,
             result.confidence,
@@ -212,11 +257,12 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
         ));
     }
 
-    if let Some(result) = tauri::detect(&bundle)? {
+    if let Some(result) = tauri::detect(&layout)? {
         let mut versions = merge_versions(result.versions, &extra_versions);
-        versions.webkit = system_webkit.clone();
+        system_webview::apply(system_webview.as_ref(), &mut versions);
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Tauri,
             result.confidence,
@@ -226,7 +272,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if nwjs_probe.is_some() {
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::NwJs,
             Confidence::High,
@@ -236,7 +283,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if flutter_version.is_some() {
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Flutter,
             Confidence::High,
@@ -246,7 +294,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if qt_probe.is_some() {
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Qt,
             Confidence::High,
@@ -254,18 +303,17 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
         ));
     }
 
-    if rn_probe.is_some() {
-        // Hermes framework = High; binary-string fallback = Medium.
-        let confidence = if app_path
-            .join("Contents/Frameworks/hermes.framework")
-            .is_dir()
-        {
+    if let Some(rn) = &rn_probe {
+        // A bundled engine (Hermes framework / library) is High; the
+        // binary-string fallback is Medium.
+        let confidence = if rn.bundled_engine {
             Confidence::High
         } else {
             Confidence::Medium
         };
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::ReactNative,
             confidence,
@@ -275,9 +323,10 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if wails_version.is_some() {
         let mut versions = extra_versions.clone();
-        versions.webkit = system_webkit.clone();
+        system_webview::apply(system_webview.as_ref(), &mut versions);
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Wails,
             Confidence::High,
@@ -287,7 +336,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if sciter_version.is_some() {
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Sciter,
             Confidence::High,
@@ -308,7 +358,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
             Confidence::Medium
         };
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Java,
             confidence,
@@ -316,12 +367,15 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
         ));
     }
 
-    // Safari itself — a deterministic bundle-id check.
-    if let Some(safari_version) = safari::detect_app(bundle.bundle_id.as_deref(), &app_path) {
+    // Safari itself — a deterministic bundle-id check. macOS only; no Safari
+    // ships on Windows / Linux.
+    #[cfg(target_os = "macos")]
+    if let Some(safari_version) = safari::detect_app(bundle.bundle_id.as_deref(), &layout.root) {
         let mut versions = extra_versions.clone();
         versions.webkit = Some(safari_version);
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Safari,
             Confidence::High,
@@ -331,12 +385,11 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     // Chromium-based browsers (Chrome, Arc, Brave, …). Check after Electron
     // because Electron apps also ship a Chromium; those are caught above.
-    if let Some(browser) = chromium_browser::detect(&app_path) {
-        extra_versions.chromium = extra_versions
-            .chromium
-            .or(browser.chromium_version);
+    if let Some(browser) = chromium_browser::detect(&layout) {
+        extra_versions.chromium = extra_versions.chromium.or(browser.chromium_version);
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::ChromiumBrowser,
             Confidence::High,
@@ -346,7 +399,8 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
     if cef_version.is_some() {
         return Ok(build(
-            &app_path,
+            identity,
+            &layout,
             &bundle,
             Framework::Cef,
             Confidence::High,
@@ -354,15 +408,16 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
         ));
     }
 
-    // Fall through: treat a bundle with an executable as Native, anything
+    // Fall through: treat an app with an executable as Native, anything
     // else as Unknown. Still carry any secondary-signal versions we found.
-    let framework = if bundle.executable.is_some() {
+    let framework = if layout.executable.is_some() {
         Framework::Native
     } else {
         Framework::Unknown
     };
     Ok(build(
-        &app_path,
+        identity,
+        &layout,
         &bundle,
         framework,
         Confidence::High,
@@ -372,6 +427,7 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 
 fn build(
     app_path: &Path,
+    layout: &Layout,
     bundle: &BundleInfo,
     framework: Framework,
     confidence: Confidence,
@@ -379,6 +435,8 @@ fn build(
 ) -> Detection {
     Detection {
         path: app_path.to_path_buf(),
+        root: layout.root.clone(),
+        executable: layout.executable.clone(),
         bundle_id: bundle.bundle_id.clone(),
         display_name: bundle.display_name.clone(),
         bundle_version: bundle.bundle_version.clone(),

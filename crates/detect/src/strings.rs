@@ -1,10 +1,11 @@
-//! Low-level byte scanning of Mach-O binaries for version fingerprints.
+//! Low-level byte scanning of executables for version fingerprints.
 //!
 //! We mmap each binary and run a handful of pre-compiled patterns across it.
-//! Nothing here parses Mach-O headers — we rely on the fact that the strings
-//! we look for (`Chrome/x.y.z`, `node-vX.Y.Z`, `tauri.localhost`,
-//! `/tauri-N.M.P/`) are stable, distinctive, and appear verbatim in
-//! `__TEXT,__cstring` / `__DATA,__const`.
+//! Nothing here parses object-file headers — we rely on the fact that the
+//! strings we look for (`Chrome/x.y.z`, `node-vX.Y.Z`, `Electron/x.y.z`,
+//! `tauri.localhost`, `/tauri-N.M.P/`) are stable, distinctive, and appear
+//! verbatim in the binary's string data. Because we scan raw bytes rather than
+//! a particular section format, this works identically on Mach-O, PE, and ELF.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -19,8 +20,7 @@ static CHROMIUM_RE: LazyLock<Regex> =
 
 /// Captures the Node.js version from the tarball-URL string Electron embeds:
 /// `https://nodejs.org/download/release/v24.13.0/node-v24.13.0.tar.gz`.
-static NODE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"node-v(\d+\.\d+\.\d+)").unwrap());
+static NODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"node-v(\d+\.\d+\.\d+)").unwrap());
 
 /// Captures the *bare* Tauri crate version from cargo-registry debug paths
 /// that Rust leaves in release binaries (panic locations, etc.).
@@ -32,15 +32,24 @@ static NODE_RE: LazyLock<Regex> =
 static TAURI_CRATE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"/tauri-(\d+\.\d+\.\d+)(?:-[a-zA-Z0-9.]+)?/").unwrap());
 
+/// Captures the Electron version Electron bakes into its default user-agent
+/// product token: `Electron/40.4.1`. This is the cross-platform substitute for
+/// reading the framework Info.plist (which only exists on macOS).
+static ELECTRON_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"Electron/(\d+\.\d+\.\d+)").unwrap());
+
 /// Scan an Electron framework binary for Chromium and Node.js versions.
 pub fn scan_electron_versions(
     binary_path: &Path,
 ) -> std::io::Result<(Option<String>, Option<String>)> {
     let mmap = open_mmap(binary_path)?;
-    Ok((
-        find_first(&CHROMIUM_RE, &mmap),
-        find_first(&NODE_RE, &mmap),
-    ))
+    Ok((find_first(&CHROMIUM_RE, &mmap), find_first(&NODE_RE, &mmap)))
+}
+
+/// Scan a binary for the Electron version embedded in its user-agent string.
+pub fn scan_electron_version(binary_path: &Path) -> std::io::Result<Option<String>> {
+    let mmap = open_mmap(binary_path)?;
+    Ok(find_first(&ELECTRON_RE, &mmap))
 }
 
 /// Scan a Tauri main binary for the Tauri crate version.

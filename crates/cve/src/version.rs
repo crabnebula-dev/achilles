@@ -160,7 +160,14 @@ pub fn current_os() -> Os {
 /// from Android") must not trigger a drop.
 fn os_phrases(os: Os) -> &'static [&'static str] {
     match os {
-        Os::Macos => &["on macos", "on mac os", "on os x", "on mac ", "macos only", "for macos"],
+        Os::Macos => &[
+            "on macos",
+            "on mac os",
+            "on os x",
+            "on mac ",
+            "macos only",
+            "for macos",
+        ],
         Os::Windows => &["on windows", "windows only", "for windows"],
         Os::Linux => &["on linux", "linux only", "for linux"],
         Os::Android => &["on android", "android only", "for android", "(android"],
@@ -233,7 +240,10 @@ mod tests {
 
     #[test]
     fn ignores_bare_numbers() {
-        assert_eq!(fixed_ceiling_from_text("removed before 2 releases", None), None);
+        assert_eq!(
+            fixed_ceiling_from_text("removed before 2 releases", None),
+            None
+        );
         assert_eq!(fixed_ceiling_from_text("no version info here", None), None);
     }
 
