@@ -73,30 +73,19 @@ fn collect_shortcuts(dir: &Path, apps: &mut Vec<DiscoveredApp>, seen: &mut HashS
 }
 
 /// Resolve a `.lnk` to the `.exe` it points at, if any.
+///
+/// Resolution goes through the Windows Shell COM API (`IShellLinkW`) so the OS
+/// itself parses the link. This avoids third-party `.lnk` parsers that panic on
+/// non-standard files (e.g. a shortcut whose `ConsoleDataBlock` carries an
+/// un-terminated console face name), and it correctly handles relative targets,
+/// environment-variable expansion, and target relocation for free.
 fn resolve_shortcut(lnk_path: &Path) -> Option<PathBuf> {
-    let link = lnk::ShellLink::open(lnk_path).ok()?;
-
-    // Prefer the absolute local target recorded in the link info.
-    if let Some(info) = link.link_info() {
-        if let Some(base) = info.local_base_path() {
-            let p = PathBuf::from(base);
-            if is_app_exe(&p) {
-                return Some(p);
-            }
-        }
+    let target = shell::resolve_link_target(lnk_path)?;
+    if is_app_exe(&target) {
+        Some(target)
+    } else {
+        None
     }
-
-    // Fall back to the relative path resolved against the shortcut's folder.
-    if let Some(rel) = link.relative_path() {
-        let base = lnk_path.parent().unwrap_or_else(|| Path::new("."));
-        if let Ok(p) = normalise(&base.join(rel)) {
-            if is_app_exe(&p) {
-                return Some(p);
-            }
-        }
-    }
-
-    None
 }
 
 /// Scan `%LOCALAPPDATA%\Programs\<app>\` for a primary executable.
@@ -188,9 +177,69 @@ fn is_app_exe(path: &Path) -> bool {
     !SKIP.iter().any(|s| stem.contains(s))
 }
 
-/// Best-effort path normalisation without touching the filesystem layout.
-fn normalise(path: &Path) -> std::io::Result<PathBuf> {
-    // `canonicalize` would resolve symlinks and verify existence; for a target
-    // that may not exist we just clean it up lexically.
-    Ok(path.components().collect())
+/// Resolve `.lnk` shortcuts through the Windows Shell COM API.
+mod shell {
+    use std::cell::Cell;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    thread_local! {
+        /// COM must be initialised once per thread before any shell object is
+        /// created. We never call `CoUninitialize` — the apartment lives for the
+        /// thread's lifetime, which is fine for our short-lived worker threads.
+        static COM_READY: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn ensure_com() {
+        COM_READY.with(|ready| {
+            if !ready.get() {
+                // Ignore the result: `S_FALSE` (already initialised) and
+                // `RPC_E_CHANGED_MODE` (thread already in a different apartment)
+                // both still leave COM usable for in-proc shell objects.
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                }
+                ready.set(true);
+            }
+        });
+    }
+
+    /// Ask the OS to resolve a `.lnk` to its target path. Returns `None` on any
+    /// COM failure or when the link has no filesystem target.
+    pub fn resolve_link_target(lnk_path: &Path) -> Option<PathBuf> {
+        ensure_com();
+
+        let wide: Vec<u16> = lnk_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let target = unsafe {
+            let link: IShellLinkW =
+                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+            let persist: IPersistFile = link.cast().ok()?;
+            persist.Load(PCWSTR(wide.as_ptr()), STGM_READ).ok()?;
+
+            // Flags `0`: return the fully resolved target with any environment
+            // strings expanded, so the result is a concrete path we can stat.
+            let mut buf = [0u16; 260]; // MAX_PATH
+            link.GetPath(&mut buf, std::ptr::null_mut(), 0).ok()?;
+
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            String::from_utf16_lossy(&buf[..len])
+        };
+
+        if target.is_empty() {
+            return None;
+        }
+        Some(PathBuf::from(target))
+    }
 }

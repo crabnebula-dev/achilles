@@ -21,7 +21,7 @@ plist.workspace = true
 # Startup-folder `.lnk` shortcuts.
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg.workspace = true
-lnk.workspace = true
+windows.workspace = true
 
 [dev-dependencies]
 detect.workspace = true

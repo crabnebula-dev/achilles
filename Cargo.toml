@@ -32,16 +32,18 @@ goblin = "0.9"
 pelite = "0.10"
 # Windows registry access (system webview, autostart, native-messaging hosts)
 winreg = "0.52"
-# Resolve Windows Start Menu `.lnk` shortcuts during discovery (pure Rust)
-lnk = "0.5"
 # Parse the embedded Authenticode PKCS#7 to read the signer certificate
 cms = "0.2"
 x509-cert = "0.2"
-# Win32 APIs for Authenticode trust verification (WinVerifyTrust)
+# Win32 APIs: Authenticode trust verification (WinVerifyTrust) and resolving
+# Start Menu / Startup `.lnk` shortcuts via the Shell COM API (IShellLinkW).
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security_WinTrust",
     "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_Storage_FileSystem",
 ] }
 # data-parallelism for the static-scan corpus loop
 rayon = "1.10"

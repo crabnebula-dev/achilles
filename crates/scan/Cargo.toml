@@ -15,9 +15,10 @@ futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
-# Resolve Start Menu `.lnk` shortcuts to their target executables.
+# Resolve Start Menu `.lnk` shortcuts to their target executables via the
+# Shell COM API (IShellLinkW) — lets the OS parse the link.
 [target.'cfg(target_os = "windows")'.dependencies]
-lnk.workspace = true
+windows.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

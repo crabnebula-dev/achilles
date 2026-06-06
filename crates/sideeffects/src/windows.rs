@@ -238,12 +238,62 @@ fn startup_shortcuts(install_dir: Option<&Path>, exe_stem: Option<&str>) -> Vec<
     out
 }
 
+/// Resolve a `.lnk` to its target path via the Windows Shell COM API
+/// (`IShellLinkW`), letting the OS parse the link. This avoids third-party
+/// `.lnk` parsers that panic on non-standard files (e.g. a shortcut carrying an
+/// un-terminated console face name in its `ConsoleDataBlock`).
 fn resolve_lnk(path: &Path) -> Option<PathBuf> {
-    let link = lnk::ShellLink::open(path).ok()?;
-    link.link_info()
-        .as_ref()
-        .and_then(|i| i.local_base_path().clone())
-        .map(PathBuf::from)
+    use std::cell::Cell;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    thread_local! {
+        // COM must be initialised once per thread before any shell object is
+        // created. We never call `CoUninitialize`; the apartment lives for the
+        // thread's lifetime, which is fine for our short-lived worker threads.
+        static COM_READY: Cell<bool> = const { Cell::new(false) };
+    }
+    COM_READY.with(|ready| {
+        if !ready.get() {
+            // `S_FALSE` (already initialised) and `RPC_E_CHANGED_MODE` (thread
+            // already in another apartment) both leave COM usable in-proc.
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
+            ready.set(true);
+        }
+    });
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let target = unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let persist: IPersistFile = link.cast().ok()?;
+        persist.Load(PCWSTR(wide.as_ptr()), STGM_READ).ok()?;
+
+        // Flags `0`: fully resolved target with environment strings expanded.
+        let mut buf = [0u16; 260]; // MAX_PATH
+        link.GetPath(&mut buf, std::ptr::null_mut(), 0).ok()?;
+
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..len])
+    };
+
+    if target.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(target))
+    }
 }
 
 /// Task Scheduler tasks (XML files under `System32\Tasks`) whose `<Command>`
