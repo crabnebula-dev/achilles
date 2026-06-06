@@ -43,6 +43,8 @@ windows = { version = "0.58", features = [
     "Win32_Security_WinTrust",
     "Win32_Security_Cryptography",
 ] }
+# data-parallelism for the static-scan corpus loop
+rayon = "1.10"
 # JS / TS AST parsing for the static-scan rules
 oxc_allocator = "0.126"
 oxc_ast = "0.126"

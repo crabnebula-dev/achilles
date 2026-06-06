@@ -27,6 +27,7 @@
 
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::Serialize;
 
 mod asar;
@@ -106,22 +107,36 @@ pub fn scan_asar(path: &Path) -> Result<Report, ScanError> {
     let mut findings = Vec::new();
 
     let mut corpus: Vec<scanner::FileContent> = Vec::new();
-    for file in archive.files() {
-        if !scanner::interesting_extension(&file.path) {
-            continue;
-        }
-        match archive.read(file) {
-            Ok(bytes) => {
-                corpus.push(scanner::FileContent {
-                    path: file.path.clone(),
-                    bytes,
-                });
-                files_scanned += 1;
-            }
-            Err(err) => errors.push(ScanErrorEntry {
+
+    // Extract each interesting file body out of the mmap in parallel. On a
+    // cold page cache this overlaps the per-file page faults instead of
+    // serializing them; `Archive::read` only borrows `&self`, and the
+    // underlying `Mmap` is `Sync`. Order matches `interesting` for a
+    // deterministic corpus.
+    let interesting: Vec<&asar::Entry> = archive
+        .files()
+        .filter(|file| scanner::interesting_extension(&file.path))
+        .collect();
+    let read_results: Vec<Result<scanner::FileContent, ScanErrorEntry>> = interesting
+        .par_iter()
+        .map(|file| match archive.read(file) {
+            Ok(bytes) => Ok(scanner::FileContent {
+                path: file.path.clone(),
+                bytes,
+            }),
+            Err(err) => Err(ScanErrorEntry {
                 file: file.path.clone(),
                 message: err.to_string(),
             }),
+        })
+        .collect();
+    for result in read_results {
+        match result {
+            Ok(content) => {
+                corpus.push(content);
+                files_scanned += 1;
+            }
+            Err(err) => errors.push(err),
         }
     }
 
@@ -156,23 +171,19 @@ pub fn scan_directory(path: &Path) -> Result<Report, ScanError> {
     let mut findings = Vec::new();
     let mut corpus: Vec<scanner::FileContent> = Vec::new();
 
-    scanner::walk_directory(path, &mut |rel_path, read_result| match read_result {
-        Ok(bytes) => {
-            corpus.push(scanner::FileContent {
-                path: rel_path.to_string(),
-                bytes,
-            });
-            files_scanned += 1;
-        }
-        Err(err) => errors.push(ScanErrorEntry {
-            file: rel_path.to_string(),
-            message: err.to_string(),
-        }),
-    })
-    .map_err(|source| ScanError::Io {
+    let source_files = scanner::collect_source_files(path).map_err(|source| ScanError::Io {
         path: path.to_path_buf(),
         source,
     })?;
+    for result in scanner::read_corpus(&source_files) {
+        match result {
+            Ok(content) => {
+                corpus.push(content);
+                files_scanned += 1;
+            }
+            Err((file, message)) => errors.push(ScanErrorEntry { file, message }),
+        }
+    }
 
     scanner::run_rules(&ruleset, &corpus, &mut findings);
 

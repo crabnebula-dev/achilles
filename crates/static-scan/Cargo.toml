@@ -10,6 +10,7 @@ description = "Regex-based static analysis rules for Electron app bundles. Reads
 
 [dependencies]
 memmap2.workspace = true
+rayon.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

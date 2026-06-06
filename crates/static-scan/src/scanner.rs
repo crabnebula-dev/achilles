@@ -5,7 +5,9 @@
 //! are skipped (some renderer bundles and source-maps are gigabytes; we
 //! refuse to allocate that much memory for what's at best a noisy match).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use rayon::prelude::*;
 
 use crate::ast::ParsedProgram;
 use crate::rules::{Finding, Matcher, Rule};
@@ -27,15 +29,18 @@ pub fn interesting_extension(path: &str) -> bool {
     })
 }
 
-pub fn walk_directory(
-    root: &Path,
-    visitor: &mut dyn FnMut(&str, Result<Vec<u8>, std::io::Error>),
-) -> std::io::Result<()> {
-    fn recurse(
-        root: &Path,
-        current: &Path,
-        visitor: &mut dyn FnMut(&str, Result<Vec<u8>, std::io::Error>),
-    ) -> std::io::Result<()> {
+/// One file selected for scanning: its POSIX-relative path (used as the
+/// finding location) alongside the absolute path to read from.
+pub struct SourcePath {
+    pub rel: String,
+    pub abs: PathBuf,
+}
+
+/// Recursively enumerate interesting source files under `root`. This walks
+/// directory metadata only (cheap, latency-bound); the expensive byte reads
+/// are deferred to [`read_corpus`] so they can run in parallel.
+pub fn collect_source_files(root: &Path) -> std::io::Result<Vec<SourcePath>> {
+    fn recurse(root: &Path, current: &Path, out: &mut Vec<SourcePath>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(current)? {
             let entry = match entry {
                 Ok(e) => e,
@@ -52,7 +57,7 @@ pub fn walk_directory(
                 Err(_) => continue,
             };
             if file_type.is_dir() {
-                recurse(root, &path, visitor)?;
+                recurse(root, &path, out)?;
             } else if file_type.is_file() {
                 let rel = path
                     .strip_prefix(root)
@@ -62,47 +67,100 @@ pub fn walk_directory(
                 if !interesting_extension(&rel) {
                     continue;
                 }
-                visitor(&rel, std::fs::read(&path));
+                out.push(SourcePath { rel, abs: path });
             }
         }
         Ok(())
     }
-    recurse(root, root, visitor)
+    let mut out = Vec::new();
+    recurse(root, root, &mut out)?;
+    Ok(out)
+}
+
+/// Read the bytes for every enumerated file in parallel. Each entry resolves
+/// to either its [`FileContent`] or a `(path, message)` read error; the
+/// caller partitions the two. Order matches `files` so the resulting corpus
+/// is deterministic.
+pub fn read_corpus(files: &[SourcePath]) -> Vec<Result<FileContent, (String, String)>> {
+    files
+        .par_iter()
+        .map(|f| {
+            std::fs::read(&f.abs)
+                .map(|bytes| FileContent {
+                    path: f.rel.clone(),
+                    bytes,
+                })
+                .map_err(|err| (f.rel.clone(), err.to_string()))
+        })
+        .collect()
 }
 
 pub fn run_rules(ruleset: &[Rule], corpus: &[FileContent], findings: &mut Vec<Finding>) {
-    for rule in ruleset {
-        match &rule.matcher {
-            Matcher::AstJs(matcher_fn) => run_ast_rule(rule, *matcher_fn, corpus, findings),
-            Matcher::RegexAbsentFromAll {
-                pattern,
-                fallback_path,
-            } => run_absent_regex(rule, pattern, fallback_path, corpus, findings),
-        }
-    }
+    // Two families of rule need different parallelism strategies:
+    //  * AST rules parse a JS/TS file and walk it. Parsing dominates the cost,
+    //    so we parse each file *once* and run every applicable AST matcher on
+    //    that single parse — instead of re-parsing per rule — then fan the
+    //    files out across a rayon pool.
+    //  * Absent-regex rules ask "does *any* file contain this pattern?", a
+    //    corpus-wide reduction. We evaluate each such rule independently and
+    //    parallelise the inner scan.
+    let ast_rules: Vec<&Rule> = ruleset
+        .iter()
+        .filter(|r| matches!(r.matcher, Matcher::AstJs(_)))
+        .collect();
+    let absent_rules: Vec<&Rule> = ruleset
+        .iter()
+        .filter(|r| matches!(r.matcher, Matcher::RegexAbsentFromAll { .. }))
+        .collect();
+
+    // rayon's indexed `collect` preserves corpus order, keeping output stable.
+    let ast_findings: Vec<Finding> = corpus
+        .par_iter()
+        .flat_map_iter(|file| scan_file_ast(&ast_rules, file))
+        .collect();
+
+    let absent_findings: Vec<Finding> = absent_rules
+        .par_iter()
+        .filter_map(|rule| eval_absent_rule(rule, corpus))
+        .collect();
+
+    findings.extend(ast_findings);
+    findings.extend(absent_findings);
 }
 
-fn run_ast_rule(
-    rule: &Rule,
-    matcher: crate::rules::AstMatcher,
-    corpus: &[FileContent],
-    findings: &mut Vec<Finding>,
-) {
-    for file in corpus_for_rule(rule, corpus) {
-        if file.bytes.len() > MAX_BYTES_PER_FILE {
+/// Parse one file once and run every AST matcher whose extension filter
+/// admits it, collecting the resulting findings.
+fn scan_file_ast(ast_rules: &[&Rule], file: &FileContent) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if file.bytes.len() > MAX_BYTES_PER_FILE {
+        return out;
+    }
+    let Some(ext) = extension_of(&file.path) else {
+        return out;
+    };
+    // Skip files no AST rule cares about before paying for a parse.
+    if !ast_rules.iter().any(|r| r.file_extensions.contains(&ext)) {
+        return out;
+    }
+    let Ok(source) = std::str::from_utf8(&file.bytes) else {
+        return out;
+    };
+    let source_type = source_type_for(&file.path);
+    let allocator = oxc_allocator::Allocator::default();
+    let parsed = ParsedProgram::parse(&allocator, source, source_type);
+
+    for rule in ast_rules {
+        if !rule.file_extensions.contains(&ext) {
             continue;
         }
-        let Ok(source) = std::str::from_utf8(&file.bytes) else {
+        let Matcher::AstJs(matcher) = &rule.matcher else {
             continue;
         };
-        let source_type = source_type_for(&file.path);
-        let allocator = oxc_allocator::Allocator::default();
-        let parsed = ParsedProgram::parse(&allocator, source, source_type);
         for m in matcher(&parsed.program) {
             let start = m.span.start as usize;
             let end = m.span.end as usize;
             let (line, column) = line_col(&file.bytes, start);
-            findings.push(Finding {
+            out.push(Finding {
                 rule_id: rule.id,
                 severity: rule.severity,
                 confidence: rule.confidence,
@@ -116,26 +174,28 @@ fn run_ast_rule(
             });
         }
     }
+    out
 }
 
-fn run_absent_regex(
-    rule: &Rule,
-    pattern: &std::sync::LazyLock<regex::bytes::Regex>,
-    fallback_path: &str,
-    corpus: &[FileContent],
-    findings: &mut Vec<Finding>,
-) {
+fn eval_absent_rule(rule: &Rule, corpus: &[FileContent]) -> Option<Finding> {
+    let Matcher::RegexAbsentFromAll {
+        pattern,
+        fallback_path,
+    } = &rule.matcher
+    else {
+        return None;
+    };
     let relevant: Vec<&FileContent> = corpus_for_rule(rule, corpus).collect();
     if relevant.is_empty() {
-        findings.push(finding_without_location(rule, fallback_path.to_string()));
-        return;
+        return Some(finding_without_location(rule, fallback_path.to_string()));
     }
     let any_match = relevant
-        .iter()
+        .par_iter()
         .any(|f| f.bytes.len() <= MAX_BYTES_PER_FILE && pattern.is_match(&f.bytes));
-    if !any_match {
-        let first = relevant[0];
-        findings.push(finding_without_location(rule, first.path.clone()));
+    if any_match {
+        None
+    } else {
+        Some(finding_without_location(rule, relevant[0].path.clone()))
     }
 }
 
