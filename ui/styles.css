@@ -426,3 +426,32 @@ dialog::backdrop {
   color: var(--fg-2);
   white-space: pre-wrap;
 }
+
+/* Runtime / dependency CVE tabs. The list can run to hundreds of entries, so
+   only the active panel is shown at a time. */
+#detail-body .cve-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 8px;
+  border-bottom: 1px solid var(--bg-3);
+}
+#detail-body .cve-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 5px 8px;
+  margin-bottom: -1px;
+  color: var(--fg-2);
+  font-family: var(--mono);
+}
+#detail-body .cve-tab:hover {
+  border-color: transparent;
+  color: var(--fg);
+}
+#detail-body .cve-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+#detail-body .cve-panel { display: none; }
+#detail-body .cve-panel.active { display: block; }

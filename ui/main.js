@@ -32,6 +32,10 @@ const detailCache = new Map();
 /** The currently-open app, for the per-detail "Export" button. */
 let currentDetail = null;
 
+/** Which CVE tab is showing ("runtime" | "dependencies"). Held here so the
+ * choice survives the async repaints that stream CVE data into the panel. */
+let activeCveTab = "runtime";
+
 function setStatus(text) {
   statusEl.textContent = text;
 }
@@ -540,13 +544,17 @@ function renderAdvisory(a) {
   </details>`;
 }
 
-function renderRuntimeCves(cves) {
-  if (!cves) return "";
+// Inner content for the runtime-CVE tab. Returns `null` when there's nothing
+// to show at all (no detected runtimes), otherwise `{ count, html }` where
+// `count` is the number of advisories (null while pending/errored, so the tab
+// label omits a count).
+function runtimeCvesContent(cves) {
+  if (!cves) return null;
   if (cves.pending) {
-    return `<h3>Runtime CVEs</h3><p style="color:var(--fg-2)">looking up advisories…</p>`;
+    return { count: null, html: `<p style="color:var(--fg-2)">looking up advisories…</p>` };
   }
   if (cves.error) {
-    return `<h3>Runtime CVEs</h3><p class="warn">${escapeHtml(cves.error)}</p>`;
+    return { count: null, html: `<p class="warn">${escapeHtml(cves.error)}</p>` };
   }
 
   const sources = [
@@ -564,56 +572,101 @@ function renderRuntimeCves(cves) {
     { key: "webkit", label: "Safari / WKWebView (system)" },
   ];
 
-  const parts = [`<h3>Runtime CVEs</h3>`];
-  let anyFound = false;
+  const parts = [];
+  let count = 0;
 
   for (const { key, label } of sources) {
     const list = sortBySeverity(cves[key] ?? []);
     if (list.length === 0) continue;
-    anyFound = true;
+    count += list.length;
     parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">${escapeHtml(label)} — ${list.length}</p>`);
     for (const a of list) parts.push(renderAdvisory(a));
   }
 
-  if (!anyFound) {
+  if (count === 0) {
     parts.push(`<p class="ok">No advisories matched for any detected runtime.</p>`);
   }
 
   if ((cves.errors ?? []).length) {
     parts.push(`<p class="warn" style="margin-top:8px">Source errors: ${escapeHtml(cves.errors.join("; "))}</p>`);
   }
-  return parts.join("");
+  return { count, html: parts.join("") };
 }
 
-function renderDepAdvisories(depAdvisories) {
+// Inner content for the dependency-CVE tab. Same `null` / `{ count, html }`
+// contract as runtimeCvesContent().
+function depCvesContent(depAdvisories) {
   if (depAdvisories === null) {
-    return `<h3>Dependency CVEs</h3><p style="color:var(--fg-2)">checking OSV…</p>`;
+    return { count: null, html: `<p style="color:var(--fg-2)">checking OSV…</p>` };
   }
   if (depAdvisories?.error) {
-    return `<h3>Dependency CVEs</h3><p class="warn">${escapeHtml(depAdvisories.error)}</p>`;
+    return { count: null, html: `<p class="warn">${escapeHtml(depAdvisories.error)}</p>` };
   }
   if (!Array.isArray(depAdvisories) || depAdvisories.length === 0) {
-    return "";
+    return null;
   }
 
   const hits = depAdvisories.filter((x) => (x.advisories ?? []).length > 0);
-  const parts = [`<h3>Dependency CVEs</h3>`];
-  parts.push(`<p style="color:var(--fg-2)">${depAdvisories.length} deps checked — ${hits.length} with advisories</p>`);
+  const parts = [
+    `<p style="color:var(--fg-2)">${depAdvisories.length} deps checked — ${hits.length} with advisories</p>`,
+  ];
+  let count = 0;
 
   if (hits.length === 0) {
     parts.push(`<p class="ok">No advisories from OSV.</p>`);
-    return parts.join("");
+  } else {
+    for (const entry of hits) {
+      count += entry.advisories.length;
+      parts.push(`<div style="margin:6px 0">
+        <strong>${escapeHtml(entry.package.name)}</strong>
+        <code style="color:var(--fg-2)">@${escapeHtml(entry.package.version)}</code>
+      </div>`);
+      for (const a of sortBySeverity(entry.advisories)) parts.push(renderAdvisory(a));
+    }
   }
 
-  for (const entry of hits) {
-    parts.push(`<div style="margin:6px 0">
-      <strong>${escapeHtml(entry.package.name)}</strong>
-      <code style="color:var(--fg-2)">@${escapeHtml(entry.package.version)}</code>
-    </div>`);
-    for (const a of sortBySeverity(entry.advisories)) parts.push(renderAdvisory(a));
-  }
+  return { count, html: parts.join("") };
+}
 
-  return parts.join("");
+// Runtime and dependency CVEs, tabbed. These lists can run to hundreds of
+// entries, so we split them across two tabs and only paint one at a time.
+// The active tab is held in `activeCveTab` (module-level) so it survives the
+// async repaints as CVE/dependency data streams in.
+function renderCves(cves, depAdvisories) {
+  const tabs = [];
+  const runtime = runtimeCvesContent(cves);
+  if (runtime) tabs.push({ id: "runtime", label: "Runtime", ...runtime });
+  const dep = depCvesContent(depAdvisories);
+  if (dep) tabs.push({ id: "dependencies", label: "Dependencies", ...dep });
+
+  if (tabs.length === 0) return "";
+
+  // Fall back to the first available tab if the remembered one isn't present
+  // yet (e.g. dependency data hasn't landed).
+  let active = activeCveTab;
+  if (!tabs.some((t) => t.id === active)) active = tabs[0].id;
+
+  const label = (t) => (t.count == null ? escapeHtml(t.label) : `${escapeHtml(t.label)} (${t.count})`);
+
+  const btns = tabs
+    .map(
+      (t) =>
+        `<button type="button" class="cve-tab${t.id === active ? " active" : ""}" data-cve-tab="${t.id}">${label(t)}</button>`,
+    )
+    .join("");
+
+  const panels = tabs
+    .map(
+      (t) =>
+        `<div class="cve-panel${t.id === active ? " active" : ""}" data-cve-tab="${t.id}">${t.html}</div>`,
+    )
+    .join("");
+
+  return `<div class="cve-section">
+    <h3>CVEs</h3>
+    <div class="cve-tabs">${btns}</div>
+    ${panels}
+  </div>`;
 }
 
 async function persistToJournal(det, dossier) {
@@ -941,17 +994,16 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
     parts.push(`<h3>Audit</h3><p class="bad">${escapeHtml(audit.error)}</p>`);
   }
 
-  const runtimeCveParts = renderRuntimeCves(cves);
-  if (runtimeCveParts) parts.push(runtimeCveParts);
-
-  const depParts = renderDepAdvisories(depAdvisories);
-  if (depParts) parts.push(depParts);
-
   const staticParts = renderStaticScan(staticScan);
   if (staticParts) parts.push(staticParts);
 
   const sideParts = renderSideEffects(sideeffects);
   if (sideParts) parts.push(sideParts);
+
+  // CVEs last: these lists can run to hundreds of entries, so they live at the
+  // bottom of the panel, split across runtime/dependency tabs.
+  const cveParts = renderCves(cves, depAdvisories);
+  if (cveParts) parts.push(cveParts);
 
   return parts.join("");
 }
@@ -962,6 +1014,24 @@ closeDetailBtn.addEventListener("click", () => {
   document
     .querySelectorAll("#apps tbody tr.selected")
     .forEach((r) => r.classList.remove("selected"));
+});
+
+// Delegated CVE tab switching: the panel's innerHTML is replaced on every async
+// repaint, so we listen on the stable container and toggle the active tab in
+// place (no full repaint), persisting the choice in `activeCveTab`.
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest(".cve-tab");
+  if (!btn) return;
+  const tab = btn.dataset.cveTab;
+  activeCveTab = tab;
+  const section = btn.closest(".cve-section");
+  if (!section) return;
+  for (const b of section.querySelectorAll(".cve-tab")) {
+    b.classList.toggle("active", b.dataset.cveTab === tab);
+  }
+  for (const p of section.querySelectorAll(".cve-panel")) {
+    p.classList.toggle("active", p.dataset.cveTab === tab);
+  }
 });
 
 // ---------- JSON export ----------
