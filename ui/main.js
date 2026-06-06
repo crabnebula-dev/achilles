@@ -277,6 +277,39 @@ function renderStaticScan(staticScan) {
   return parts.join("");
 }
 
+// critical → high → medium → low → unrated, so we can sort highest-risk first.
+function severityRank(sev) {
+  switch ((sev ?? "").toLowerCase()) {
+    case "critical": return 4;
+    case "high": return 3;
+    case "medium": return 2;
+    case "low": return 1;
+    default: return 0;
+  }
+}
+
+// Highest severity first; stable for equal severity (preserves source order).
+function sortBySeverity(list) {
+  return [...list].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+}
+
+// One advisory, collapsed by default: the summary shows the CVE id (+ severity
+// and fix), and the description reveals on expand — these lists get long.
+function renderAdvisory(a) {
+  const sev = (a.severity ?? "").toLowerCase();
+  const badge = a.severity
+    ? `<span class="${escapeHtml(sev)}">[${escapeHtml(a.severity)}]</span>`
+    : "";
+  const fixed = a.fixed_in ? ` — fixed in <code>${escapeHtml(a.fixed_in)}</code>` : "";
+  const body = a.summary
+    ? escapeHtml(a.summary)
+    : `<span class="muted">no description provided</span>`;
+  return `<details class="advisory ${escapeHtml(sev)}">
+    <summary><strong>${escapeHtml(a.id)}</strong> ${badge}${fixed}</summary>
+    <div class="advisory-body">${body}</div>
+  </details>`;
+}
+
 function renderRuntimeCves(cves) {
   if (!cves) return "";
   if (cves.pending) {
@@ -305,19 +338,11 @@ function renderRuntimeCves(cves) {
   let anyFound = false;
 
   for (const { key, label } of sources) {
-    const list = cves[key] ?? [];
+    const list = sortBySeverity(cves[key] ?? []);
     if (list.length === 0) continue;
     anyFound = true;
     parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">${escapeHtml(label)} — ${list.length}</p>`);
-    for (const a of list) {
-      const sev = (a.severity ?? "").toLowerCase();
-      parts.push(`<div class="advisory ${escapeHtml(sev)}">
-        <strong>${escapeHtml(a.id)}</strong>
-        ${a.severity ? `<span class="${escapeHtml(sev)}">[${escapeHtml(a.severity)}]</span>` : ""}
-        ${a.fixed_in ? ` — fixed in <code>${escapeHtml(a.fixed_in)}</code>` : ""}
-        <br><span style="color:var(--fg-2)">${escapeHtml(a.summary || "")}</span>
-      </div>`);
-    }
+    for (const a of list) parts.push(renderAdvisory(a));
   }
 
   if (!anyFound) {
@@ -355,15 +380,7 @@ function renderDepAdvisories(depAdvisories) {
       <strong>${escapeHtml(entry.package.name)}</strong>
       <code style="color:var(--fg-2)">@${escapeHtml(entry.package.version)}</code>
     </div>`);
-    for (const a of entry.advisories) {
-      const sev = (a.severity ?? "").toLowerCase();
-      parts.push(`<div class="advisory ${escapeHtml(sev)}">
-        <strong>${escapeHtml(a.id)}</strong>
-        ${a.severity ? `<span class="${escapeHtml(sev)}">[${escapeHtml(a.severity)}]</span>` : ""}
-        ${a.fixed_in ? ` — fixed in <code>${escapeHtml(a.fixed_in)}</code>` : ""}
-        <br><span style="color:var(--fg-2)">${escapeHtml(a.summary || "")}</span>
-      </div>`);
-    }
+    for (const a of sortBySeverity(entry.advisories)) parts.push(renderAdvisory(a));
   }
 
   return parts.join("");

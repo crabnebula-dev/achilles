@@ -340,3 +340,22 @@ dialog::backdrop {
 #detail-body .advisory.high { border-left-color: var(--bad); }
 #detail-body .advisory.critical { border-left-color: var(--bad); }
 #detail-body .advisory.medium { border-left-color: var(--warn); }
+
+/* Collapsible advisories: the CVE id shows in the summary; the description
+   reveals on expand. */
+#detail-body details.advisory > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+#detail-body details.advisory > summary::-webkit-details-marker { display: none; }
+#detail-body details.advisory > summary::before {
+  content: "▸ ";
+  color: var(--fg-2);
+}
+#detail-body details.advisory[open] > summary::before { content: "▾ "; }
+#detail-body .advisory-body {
+  margin-top: 6px;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+}
