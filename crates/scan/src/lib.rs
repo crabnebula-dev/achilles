@@ -48,7 +48,8 @@ pub enum ScanEvent {
     Started { total: usize },
     /// An app was detected. May appear with [`Framework::Unknown`] when the
     /// path had no identifiable framework; consumers may choose to hide those.
-    Detected(Detection),
+    /// Boxed because a `Detection` is far larger than the other variants.
+    Detected(Box<Detection>),
     /// Detection failed for a single app. The scan continues.
     Error { path: PathBuf, message: String },
     /// Scan finished. `count` matches the initial `total`.
@@ -110,7 +111,7 @@ pub async fn scan(apps: Vec<DiscoveredApp>, concurrency: usize, tx: mpsc::Sender
                 let path = app.path.clone();
                 let result = tokio::task::spawn_blocking(move || detect::detect_app(&app)).await;
                 let event = match result {
-                    Ok(Ok(detection)) => ScanEvent::Detected(detection),
+                    Ok(Ok(detection)) => ScanEvent::Detected(Box::new(detection)),
                     Ok(Err(err)) => ScanEvent::Error {
                         path,
                         message: err.to_string(),

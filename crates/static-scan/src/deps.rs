@@ -141,8 +141,7 @@ fn clean_pkg_json_range(value: &str) -> String {
         // git/file/npm-alias specs, or wildcard — skip.
         return String::new();
     }
-    let stripped =
-        trimmed.trim_start_matches(|c: char| matches!(c, '^' | '~' | '=' | '>' | '<' | 'v' | ' '));
+    let stripped = trimmed.trim_start_matches(['^', '~', '=', '>', '<', 'v', ' ']);
     stripped.split_whitespace().next().unwrap_or("").to_owned()
 }
 

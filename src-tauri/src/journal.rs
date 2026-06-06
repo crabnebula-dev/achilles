@@ -173,7 +173,7 @@ pub fn list_all() -> std::io::Result<Vec<EntrySummary>> {
         }
     }
 
-    out.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.saved_at));
     Ok(out)
 }
 

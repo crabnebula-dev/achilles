@@ -14,18 +14,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Settings {
     pub sources: SourceSettings,
     pub filters: FilterSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            sources: SourceSettings::default(),
-            filters: FilterSettings::default(),
-        }
-    }
 }
 
 /// Post-lookup filtering applied to every [`crate::CveReport`].

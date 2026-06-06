@@ -21,7 +21,7 @@ pub struct FileContent {
 }
 
 pub fn interesting_extension(path: &str) -> bool {
-    extension_of(path).map_or(false, |ext| {
+    extension_of(path).is_some_and(|ext| {
         matches!(
             ext,
             "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "html" | "htm" | "json"
@@ -218,9 +218,9 @@ fn corpus_for_rule<'a>(
     rule: &'a Rule,
     corpus: &'a [FileContent],
 ) -> impl Iterator<Item = &'a FileContent> {
-    corpus.iter().filter(|f| {
-        extension_of(&f.path).map_or(false, |ext| rule.file_extensions.iter().any(|e| *e == ext))
-    })
+    corpus
+        .iter()
+        .filter(|f| extension_of(&f.path).is_some_and(|ext| rule.file_extensions.contains(&ext)))
 }
 
 fn source_type_for(path: &str) -> oxc_span::SourceType {
@@ -260,7 +260,7 @@ fn context(bytes: &[u8], start: usize, end: usize) -> String {
             _ => '·',
         })
         .collect();
-    s = s.replace('\n', " ").replace('\r', " ");
+    s = s.replace(['\n', '\r'], " ");
     s.truncate(SAMPLE_CONTEXT);
     s
 }

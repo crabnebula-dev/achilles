@@ -35,6 +35,7 @@ static TAURI_CRATE_RE: LazyLock<Regex> =
 /// Captures the Electron version Electron bakes into its default user-agent
 /// product token: `Electron/40.4.1`. This is the cross-platform substitute for
 /// reading the framework Info.plist (which only exists on macOS).
+#[allow(dead_code)] // used by the non-macOS Electron probe
 static ELECTRON_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Electron/(\d+\.\d+\.\d+)").unwrap());
 
@@ -47,6 +48,7 @@ pub fn scan_electron_versions(
 }
 
 /// Scan a binary for the Electron version embedded in its user-agent string.
+#[allow(dead_code)] // used by the non-macOS Electron probe
 pub fn scan_electron_version(binary_path: &Path) -> std::io::Result<Option<String>> {
     let mmap = open_mmap(binary_path)?;
     Ok(find_first(&ELECTRON_RE, &mmap))

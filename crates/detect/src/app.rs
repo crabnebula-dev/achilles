@@ -160,6 +160,7 @@ pub(crate) struct Layout {
     /// Lower-cased basenames of the libraries the executable imports
     /// (ELF `DT_NEEDED` / PE import table). Empty on macOS or when the binary
     /// can't be parsed. Lazily filled by [`Layout::imports`].
+    #[allow(dead_code)] // read by the non-macOS probes via `has_library`
     imports: std::cell::OnceCell<Vec<String>>,
 }
 
@@ -192,6 +193,7 @@ impl Layout {
     ///
     /// * macOS: `root/Contents/Resources`.
     /// * Windows / Linux: `root/resources`.
+    #[allow(dead_code)] // used by the non-macOS Electron probe
     pub(crate) fn resources_dir(&self) -> PathBuf {
         #[cfg(target_os = "macos")]
         {
@@ -207,6 +209,7 @@ impl Layout {
     /// or a sibling file in the app's *private* `root` (or `root/lib`) matches.
     /// Used by non-macOS probes to find `.dll` / `.so` framework markers whether
     /// bundled or system-linked.
+    #[allow(dead_code)] // used by the non-macOS probes
     pub(crate) fn has_library(&self, needle: &str) -> bool {
         let needle = needle.to_ascii_lowercase();
         // The import table (DT_NEEDED / PE imports) is the reliable signal and
@@ -241,6 +244,7 @@ impl Layout {
     }
 
     /// Lower-cased basenames of imported / needed libraries. Cached.
+    #[allow(dead_code)] // used by the non-macOS probes via `has_library`
     fn imports(&self) -> &[String] {
         self.imports.get_or_init(|| {
             #[cfg(target_os = "macos")]

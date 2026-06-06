@@ -115,22 +115,12 @@ struct CpeMatch {
 
 // ---------- public --------------------------------------------------------
 
-/// Query NVD for every CVE affecting `<vendor>:<product>:<version>`.
+/// Query NVD for every CVE affecting `<vendor>:<product>:<version>`, sending an
+/// `apiKey` header when provided.
 ///
-/// NVD's rate limit is 5 req/30s unauthenticated — we don't enforce that
-/// here, we just let `reqwest` hit the endpoint and rely on the cache
-/// covering 99% of repeated lookups.
-pub async fn lookup_cpe(
-    http: &Client,
-    vendor: &str,
-    product: &str,
-    version: &str,
-) -> Result<Vec<Advisory>, Error> {
-    lookup_cpe_with_key(http, vendor, product, version, None).await
-}
-
-/// Same as [`lookup_cpe`] but sends an `apiKey` header when provided,
-/// bumping the rate limit from 5 to 50 requests per 30 seconds.
+/// NVD's rate limit is 5 req/30s unauthenticated (50 with a key) — we don't
+/// enforce that here, we just let `reqwest` hit the endpoint and rely on the
+/// cache covering 99% of repeated lookups.
 pub async fn lookup_cpe_with_key(
     http: &Client,
     vendor: &str,

@@ -134,6 +134,7 @@ pub enum Os {
     Linux,
     Android,
     Ios,
+    #[allow(clippy::enum_variant_names)]
     ChromeOs,
 }
 

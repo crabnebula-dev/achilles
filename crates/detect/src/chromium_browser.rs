@@ -21,6 +21,7 @@ pub struct Detection {
 
 /// Known Chromium-browser executable basenames (lower-cased, without the
 /// platform `.exe` suffix).
+#[allow(dead_code)] // matched by the non-macOS browser probe
 const BROWSER_BINARIES: &[&str] = &[
     "chrome",
     "msedge",

@@ -98,7 +98,7 @@ pub struct OpenExternalVisitor {
 impl<'alloc> Visit<'alloc> for OpenExternalVisitor {
     fn visit_call_expression(&mut self, call: &CallExpression<'alloc>) {
         if is_call_like(&call.callee, "shell", "openExternal") {
-            let note = if call.arguments.first().map_or(false, is_plain_string_arg) {
+            let note = if call.arguments.first().is_some_and(is_plain_string_arg) {
                 "literal URL — likely safe"
             } else {
                 "non-literal argument — needs manual review"
