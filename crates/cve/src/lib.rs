@@ -179,106 +179,310 @@ impl Client_ {
 
         if let Some(v) = &versions.electron {
             if s.osv.enabled {
-                task!(Bucket::Electron, "osv", "electron", v, sources::osv::lookup(http, "npm", "electron", v));
+                task!(
+                    Bucket::Electron,
+                    "osv",
+                    "electron",
+                    v,
+                    sources::osv::lookup(http, "npm", "electron", v)
+                );
             }
             if s.ghsa.enabled {
-                task!(Bucket::Electron, "ghsa", "electron", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "electron", v));
+                task!(
+                    Bucket::Electron,
+                    "ghsa",
+                    "electron",
+                    v,
+                    sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "electron", v)
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Electron, "euvd", "electron", v, sources::euvd::lookup(http, "Electron", "Electron", v));
+                task!(
+                    Bucket::Electron,
+                    "euvd",
+                    "electron",
+                    v,
+                    sources::euvd::lookup(http, "Electron", "Electron", v)
+                );
             }
         }
 
         if let Some(v) = &versions.tauri {
             if s.osv.enabled {
-                task!(Bucket::Tauri, "osv", "tauri", v, sources::osv::lookup(http, "crates.io", "tauri", v));
+                task!(
+                    Bucket::Tauri,
+                    "osv",
+                    "tauri",
+                    v,
+                    sources::osv::lookup(http, "crates.io", "tauri", v)
+                );
             }
             if s.ghsa.enabled {
-                task!(Bucket::Tauri, "ghsa", "tauri", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "rust", "tauri", v));
+                task!(
+                    Bucket::Tauri,
+                    "ghsa",
+                    "tauri",
+                    v,
+                    sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "rust", "tauri", v)
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Tauri, "euvd", "tauri", v, sources::euvd::lookup(http, "Tauri", "Tauri", v));
+                task!(
+                    Bucket::Tauri,
+                    "euvd",
+                    "tauri",
+                    v,
+                    sources::euvd::lookup(http, "Tauri", "Tauri", v)
+                );
             }
         }
 
         if let Some(v) = &versions.node {
             if s.nvd.enabled {
-                task!(Bucket::Node, "nvd", "node", v, sources::nvd::lookup_cpe_with_key(http, "nodejs", "node.js", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Node,
+                    "nvd",
+                    "node",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "nodejs",
+                        "node.js",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Node, "euvd", "node", v, sources::euvd::lookup(http, "Node.js", "Node.js", v));
+                task!(
+                    Bucket::Node,
+                    "euvd",
+                    "node",
+                    v,
+                    sources::euvd::lookup(http, "Node.js", "Node.js", v)
+                );
             }
         }
 
         if let Some(v) = &versions.chromium {
             if s.nvd.enabled {
-                task!(Bucket::Chromium, "nvd", "chromium", v, sources::nvd::lookup_cpe_with_key(http, "google", "chrome", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Chromium,
+                    "nvd",
+                    "chromium",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "google",
+                        "chrome",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Chromium, "euvd", "chromium", v, sources::euvd::lookup(http, "Google", "Chrome", v));
+                task!(
+                    Bucket::Chromium,
+                    "euvd",
+                    "chromium",
+                    v,
+                    sources::euvd::lookup(http, "Google", "Chrome", v)
+                );
             }
         }
 
         if let Some(v) = &versions.flutter {
             if s.nvd.enabled {
-                task!(Bucket::Flutter, "nvd", "flutter", v, sources::nvd::lookup_cpe_with_key(http, "google", "flutter", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Flutter,
+                    "nvd",
+                    "flutter",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "google",
+                        "flutter",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Flutter, "euvd", "flutter", v, sources::euvd::lookup(http, "Google", "Flutter", v));
+                task!(
+                    Bucket::Flutter,
+                    "euvd",
+                    "flutter",
+                    v,
+                    sources::euvd::lookup(http, "Google", "Flutter", v)
+                );
             }
         }
 
         if let Some(v) = &versions.qt {
             if s.nvd.enabled {
-                task!(Bucket::Qt, "nvd", "qt", v, sources::nvd::lookup_cpe_with_key(http, "qt", "qt", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Qt,
+                    "nvd",
+                    "qt",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "qt",
+                        "qt",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Qt, "euvd", "qt", v, sources::euvd::lookup(http, "Qt", "Qt", v));
+                task!(
+                    Bucket::Qt,
+                    "euvd",
+                    "qt",
+                    v,
+                    sources::euvd::lookup(http, "Qt", "Qt", v)
+                );
             }
         }
 
         if let Some(v) = &versions.nwjs {
             if s.nvd.enabled {
-                task!(Bucket::Nwjs, "nvd", "nwjs", v, sources::nvd::lookup_cpe_with_key(http, "nwjs", "nwjs", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Nwjs,
+                    "nvd",
+                    "nwjs",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "nwjs",
+                        "nwjs",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Nwjs, "euvd", "nwjs", v, sources::euvd::lookup(http, "nwjs", "NW.js", v));
+                task!(
+                    Bucket::Nwjs,
+                    "euvd",
+                    "nwjs",
+                    v,
+                    sources::euvd::lookup(http, "nwjs", "NW.js", v)
+                );
             }
         }
 
         if let Some(v) = &versions.react_native {
             if s.nvd.enabled {
-                task!(Bucket::ReactNative, "nvd", "react-native", v, sources::nvd::lookup_cpe_with_key(http, "facebook", "react_native", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::ReactNative,
+                    "nvd",
+                    "react-native",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "facebook",
+                        "react_native",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.osv.enabled {
-                task!(Bucket::ReactNative, "osv", "react-native", v, sources::osv::lookup(http, "npm", "react-native", v));
+                task!(
+                    Bucket::ReactNative,
+                    "osv",
+                    "react-native",
+                    v,
+                    sources::osv::lookup(http, "npm", "react-native", v)
+                );
             }
             if s.ghsa.enabled {
-                task!(Bucket::ReactNative, "ghsa", "react-native", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "react-native", v));
+                task!(
+                    Bucket::ReactNative,
+                    "ghsa",
+                    "react-native",
+                    v,
+                    sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "react-native", v)
+                );
             }
         }
 
         if let Some(v) = &versions.wails {
             if s.nvd.enabled {
-                task!(Bucket::Wails, "nvd", "wails", v, sources::nvd::lookup_cpe_with_key(http, "wailsapp", "wails", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Wails,
+                    "nvd",
+                    "wails",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "wailsapp",
+                        "wails",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.ghsa.enabled {
-                task!(Bucket::Wails, "ghsa", "wails", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "go", "github.com/wailsapp/wails/v2", v));
+                task!(
+                    Bucket::Wails,
+                    "ghsa",
+                    "wails",
+                    v,
+                    sources::ghsa::lookup(
+                        http,
+                        s.ghsa.token.as_deref(),
+                        "go",
+                        "github.com/wailsapp/wails/v2",
+                        v
+                    )
+                );
             }
         }
 
         if let Some(v) = &versions.sciter {
             if s.nvd.enabled {
-                task!(Bucket::Sciter, "nvd", "sciter", v, sources::nvd::lookup_cpe_with_key(http, "terrainformatica", "sciter", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Sciter,
+                    "nvd",
+                    "sciter",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "terrainformatica",
+                        "sciter",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
         }
 
         if let Some(v) = &versions.webkit {
             if s.nvd.enabled {
-                task!(Bucket::Webkit, "nvd", "webkit", v, sources::nvd::lookup_cpe_with_key(http, "apple", "safari", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Webkit,
+                    "nvd",
+                    "webkit",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "apple",
+                        "safari",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Webkit, "euvd", "webkit", v, sources::euvd::lookup(http, "Apple", "Safari", v));
+                task!(
+                    Bucket::Webkit,
+                    "euvd",
+                    "webkit",
+                    v,
+                    sources::euvd::lookup(http, "Apple", "Safari", v)
+                );
             }
         }
 
@@ -286,10 +490,28 @@ impl Client_ {
             if s.nvd.enabled {
                 // Oracle JDK is the canonical CPE; OpenJDK advisories are
                 // typically echoed there because they share a codebase.
-                task!(Bucket::Java, "nvd", "java", v, sources::nvd::lookup_cpe_with_key(http, "oracle", "jdk", v, s.nvd.api_key.as_deref()));
+                task!(
+                    Bucket::Java,
+                    "nvd",
+                    "java",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "oracle",
+                        "jdk",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
             }
             if s.euvd.enabled {
-                task!(Bucket::Java, "euvd", "java", v, sources::euvd::lookup(http, "Oracle", "JDK", v));
+                task!(
+                    Bucket::Java,
+                    "euvd",
+                    "java",
+                    v,
+                    sources::euvd::lookup(http, "Oracle", "JDK", v)
+                );
             }
         }
 

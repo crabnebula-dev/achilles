@@ -370,39 +370,79 @@ async function openDetail(det) {
       executable: det.executable ?? null,
     }).catch((e) => ({ error: String(e) }));
 
-    // 1) First paint — the local panes, with CVEs shown as pending.
-    const [audit, staticScan, sideeffects] = await Promise.all([auditP, staticP, sideP]);
+    // Single mutable view-state for this pane. Each command writes its own
+    // slice as it resolves and repaints independently, so the fast local
+    // audits don't wait on the network-bound CVE/dependency lookups. Pending
+    // slices render as "loading" placeholders (CVEs / dep advisories) or are
+    // simply omitted (audit / static / side-effects) until their data lands.
     const CVES_PENDING = { pending: true };
     const cache = {
       detection: det,
-      audit,
+      audit: undefined,
       cves: CVES_PENDING,
-      staticScan,
-      sideeffects,
+      staticScan: undefined,
+      sideeffects: undefined,
       depAdvisories: null,
       savedAtIso: null,
     };
     detailCache.set(det.path, cache);
-    if (stillOpen()) {
-      detailBody.innerHTML = renderDetail(det, audit, CVES_PENDING, staticScan, null, null, sideeffects);
-    }
 
-    // Dep advisories depend only on the static-scan dep list.
-    const deps = staticScan && !staticScan.error ? staticScan.dependencies ?? [] : [];
-    const depAdvisoriesPromise = deps.length > 0
-      ? invoke("dependency_scan", { deps }).catch((e) => ({ error: String(e) }))
-      : Promise.resolve([]);
+    // Repaint from whatever slices have resolved so far. The stillOpen() guard
+    // keeps a slow promise from a previous click out of a newer pane.
+    const repaint = () => {
+      if (stillOpen()) {
+        detailBody.innerHTML = renderDetail(
+          det,
+          cache.audit,
+          cache.cves,
+          cache.staticScan,
+          cache.depAdvisories,
+          cache.savedAtIso,
+          cache.sideeffects,
+        );
+      }
+    };
 
-    // 2) Runtime CVEs arrive — repaint (dep advisories may still be pending).
-    const cves = await cvesP;
-    cache.cves = cves;
-    if (stillOpen()) {
-      detailBody.innerHTML = renderDetail(det, audit, cves, staticScan, null, null, sideeffects);
-    }
+    // First paint — CVEs pending, dep advisories pending, local panes empty.
+    repaint();
 
-    // 3) Dep advisories arrive — final repaint + journal persist.
-    const depAdvisories = await depAdvisoriesPromise;
-    cache.depAdvisories = depAdvisories;
+    auditP.then((audit) => {
+      cache.audit = audit;
+      repaint();
+    });
+    sideP.then((sideeffects) => {
+      cache.sideeffects = sideeffects;
+      repaint();
+    });
+    cvesP.then((cves) => {
+      cache.cves = cves;
+      repaint();
+    });
+
+    // Dep advisories need the static-scan dep list, so they chain off staticP:
+    // paint the static pane as soon as it lands, then kick off the OSV lookup.
+    const depAdvisoriesPromise = staticP.then((staticScan) => {
+      cache.staticScan = staticScan;
+      repaint();
+      const deps = staticScan && !staticScan.error ? staticScan.dependencies ?? [] : [];
+      return deps.length > 0
+        ? invoke("dependency_scan", { deps }).catch((e) => ({ error: String(e) }))
+        : [];
+    });
+    depAdvisoriesPromise.then((depAdvisories) => {
+      cache.depAdvisories = depAdvisories;
+      repaint();
+    });
+
+    // Once every slice has resolved, persist to the journal and stamp the
+    // saved time (a final repaint shows the "saved to journal" line).
+    const [audit, cves, sideeffects, staticScan, depAdvisories] = await Promise.all([
+      auditP,
+      cvesP,
+      sideP,
+      staticP,
+      depAdvisoriesPromise,
+    ]);
     const savedAtIso = await persistToJournal(det, {
       detection: det,
       audit,
@@ -411,17 +451,9 @@ async function openDetail(det) {
       sideeffects,
       depAdvisories,
     });
-    if (savedAtIso) cache.savedAtIso = savedAtIso;
-    if (stillOpen()) {
-      detailBody.innerHTML = renderDetail(
-        det,
-        audit,
-        cves,
-        staticScan,
-        depAdvisories,
-        savedAtIso,
-        sideeffects,
-      );
+    if (savedAtIso) {
+      cache.savedAtIso = savedAtIso;
+      repaint();
     }
   } catch (err) {
     detailBody.innerHTML = `<p class="bad">error: ${escapeHtml(err)}</p>`;
