@@ -81,6 +81,7 @@ dependencies = [
  "cms",
  "goblin",
  "memchr",
+ "memmap2",
  "plist",
  "serde",
  "serde_json",
@@ -583,6 +584,7 @@ version = "0.1.0"
 dependencies = [
  "detect",
  "dirs",
+ "futures",
  "reqwest 0.12.28",
  "semver",
  "serde",

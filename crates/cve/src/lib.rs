@@ -65,6 +65,42 @@ pub struct CveReport {
     pub errors: Vec<String>,
 }
 
+/// Which [`CveReport`] field a concurrent lookup feeds into.
+#[derive(Debug, Clone, Copy)]
+enum Bucket {
+    Electron,
+    Tauri,
+    Node,
+    Chromium,
+    Flutter,
+    Qt,
+    Nwjs,
+    ReactNative,
+    Wails,
+    Sciter,
+    Java,
+    Webkit,
+}
+
+impl CveReport {
+    fn bucket_mut(&mut self, bucket: Bucket) -> &mut Vec<Advisory> {
+        match bucket {
+            Bucket::Electron => &mut self.electron,
+            Bucket::Tauri => &mut self.tauri,
+            Bucket::Node => &mut self.node,
+            Bucket::Chromium => &mut self.chromium,
+            Bucket::Flutter => &mut self.flutter,
+            Bucket::Qt => &mut self.qt,
+            Bucket::Nwjs => &mut self.nwjs,
+            Bucket::ReactNative => &mut self.react_native,
+            Bucket::Wails => &mut self.wails,
+            Bucket::Sciter => &mut self.sciter,
+            Bucket::Java => &mut self.java,
+            Bucket::Webkit => &mut self.webkit,
+        }
+    }
+}
+
 /// One npm dependency extracted from a bundle's `package.json` /
 /// `package-lock.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,286 +155,130 @@ impl Client_ {
     /// `errors` and the report still returns. Sources disabled in settings
     /// are skipped silently.
     pub async fn report_for(&self, versions: &Versions) -> CveReport {
+        use futures::future::{join_all, BoxFuture};
+
         let mut report = CveReport::default();
         let s = &self.settings.sources;
+        let http = &self.http;
+
+        // One lookup future per (runtime, source). They're independent network
+        // calls, so we run them all concurrently rather than awaiting each in
+        // turn — a multi-runtime Electron app would otherwise pay for a dozen
+        // serialised round-trips (with NVD rate-limited on top). `join_all`
+        // preserves order, so advisories land in each bucket as before.
+        #[allow(clippy::type_complexity)]
+        let mut tasks: Vec<BoxFuture<'_, (Bucket, String, Result<Vec<Advisory>, Error>)>> =
+            Vec::new();
+
+        macro_rules! task {
+            ($bucket:expr, $src:literal, $name:literal, $v:expr, $fut:expr) => {{
+                let prefix = format!("[{}] {} {}", $src, $name, $v);
+                tasks.push(Box::pin(async move { ($bucket, prefix, $fut.await) }));
+            }};
+        }
 
         if let Some(v) = &versions.electron {
             if s.osv.enabled {
-                match sources::osv::lookup(&self.http, "npm", "electron", v).await {
-                    Ok(advisories) => report.electron.extend(advisories),
-                    Err(err) => report.errors.push(format!("[osv] electron {v}: {err}")),
-                }
+                task!(Bucket::Electron, "osv", "electron", v, sources::osv::lookup(http, "npm", "electron", v));
             }
             if s.ghsa.enabled {
-                match sources::ghsa::lookup(
-                    &self.http,
-                    s.ghsa.token.as_deref(),
-                    "npm",
-                    "electron",
-                    v,
-                )
-                .await
-                {
-                    Ok(advisories) => report.electron.extend(advisories),
-                    Err(err) => report.errors.push(format!("[ghsa] electron {v}: {err}")),
-                }
+                task!(Bucket::Electron, "ghsa", "electron", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "electron", v));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Electron", "Electron", v).await {
-                    Ok(advisories) => report.electron.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] electron {v}: {err}")),
-                }
+                task!(Bucket::Electron, "euvd", "electron", v, sources::euvd::lookup(http, "Electron", "Electron", v));
             }
         }
 
         if let Some(v) = &versions.tauri {
             if s.osv.enabled {
-                match sources::osv::lookup(&self.http, "crates.io", "tauri", v).await {
-                    Ok(advisories) => report.tauri.extend(advisories),
-                    Err(err) => report.errors.push(format!("[osv] tauri {v}: {err}")),
-                }
+                task!(Bucket::Tauri, "osv", "tauri", v, sources::osv::lookup(http, "crates.io", "tauri", v));
             }
             if s.ghsa.enabled {
-                match sources::ghsa::lookup(&self.http, s.ghsa.token.as_deref(), "rust", "tauri", v)
-                    .await
-                {
-                    Ok(advisories) => report.tauri.extend(advisories),
-                    Err(err) => report.errors.push(format!("[ghsa] tauri {v}: {err}")),
-                }
+                task!(Bucket::Tauri, "ghsa", "tauri", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "rust", "tauri", v));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Tauri", "Tauri", v).await {
-                    Ok(advisories) => report.tauri.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] tauri {v}: {err}")),
-                }
+                task!(Bucket::Tauri, "euvd", "tauri", v, sources::euvd::lookup(http, "Tauri", "Tauri", v));
             }
         }
 
         if let Some(v) = &versions.node {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "nodejs",
-                    "node.js",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.node.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] node {v}: {err}")),
-                }
+                task!(Bucket::Node, "nvd", "node", v, sources::nvd::lookup_cpe_with_key(http, "nodejs", "node.js", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Node.js", "Node.js", v).await {
-                    Ok(advisories) => report.node.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] node {v}: {err}")),
-                }
+                task!(Bucket::Node, "euvd", "node", v, sources::euvd::lookup(http, "Node.js", "Node.js", v));
             }
         }
 
         if let Some(v) = &versions.chromium {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "google",
-                    "chrome",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.chromium.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] chromium {v}: {err}")),
-                }
+                task!(Bucket::Chromium, "nvd", "chromium", v, sources::nvd::lookup_cpe_with_key(http, "google", "chrome", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Google", "Chrome", v).await {
-                    Ok(advisories) => report.chromium.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] chromium {v}: {err}")),
-                }
+                task!(Bucket::Chromium, "euvd", "chromium", v, sources::euvd::lookup(http, "Google", "Chrome", v));
             }
         }
 
         if let Some(v) = &versions.flutter {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "google",
-                    "flutter",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.flutter.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] flutter {v}: {err}")),
-                }
+                task!(Bucket::Flutter, "nvd", "flutter", v, sources::nvd::lookup_cpe_with_key(http, "google", "flutter", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Google", "Flutter", v).await {
-                    Ok(advisories) => report.flutter.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] flutter {v}: {err}")),
-                }
+                task!(Bucket::Flutter, "euvd", "flutter", v, sources::euvd::lookup(http, "Google", "Flutter", v));
             }
         }
 
         if let Some(v) = &versions.qt {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "qt",
-                    "qt",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.qt.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] qt {v}: {err}")),
-                }
+                task!(Bucket::Qt, "nvd", "qt", v, sources::nvd::lookup_cpe_with_key(http, "qt", "qt", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Qt", "Qt", v).await {
-                    Ok(advisories) => report.qt.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] qt {v}: {err}")),
-                }
+                task!(Bucket::Qt, "euvd", "qt", v, sources::euvd::lookup(http, "Qt", "Qt", v));
             }
         }
 
         if let Some(v) = &versions.nwjs {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "nwjs",
-                    "nwjs",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.nwjs.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] nwjs {v}: {err}")),
-                }
+                task!(Bucket::Nwjs, "nvd", "nwjs", v, sources::nvd::lookup_cpe_with_key(http, "nwjs", "nwjs", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "nwjs", "NW.js", v).await {
-                    Ok(advisories) => report.nwjs.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] nwjs {v}: {err}")),
-                }
+                task!(Bucket::Nwjs, "euvd", "nwjs", v, sources::euvd::lookup(http, "nwjs", "NW.js", v));
             }
         }
 
         if let Some(v) = &versions.react_native {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "facebook",
-                    "react_native",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.react_native.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] react-native {v}: {err}")),
-                }
+                task!(Bucket::ReactNative, "nvd", "react-native", v, sources::nvd::lookup_cpe_with_key(http, "facebook", "react_native", v, s.nvd.api_key.as_deref()));
             }
             if s.osv.enabled {
-                match sources::osv::lookup(&self.http, "npm", "react-native", v).await {
-                    Ok(advisories) => report.react_native.extend(advisories),
-                    Err(err) => report.errors.push(format!("[osv] react-native {v}: {err}")),
-                }
+                task!(Bucket::ReactNative, "osv", "react-native", v, sources::osv::lookup(http, "npm", "react-native", v));
             }
             if s.ghsa.enabled {
-                match sources::ghsa::lookup(
-                    &self.http,
-                    s.ghsa.token.as_deref(),
-                    "npm",
-                    "react-native",
-                    v,
-                )
-                .await
-                {
-                    Ok(advisories) => report.react_native.extend(advisories),
-                    Err(err) => report
-                        .errors
-                        .push(format!("[ghsa] react-native {v}: {err}")),
-                }
+                task!(Bucket::ReactNative, "ghsa", "react-native", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "npm", "react-native", v));
             }
         }
 
         if let Some(v) = &versions.wails {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "wailsapp",
-                    "wails",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.wails.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] wails {v}: {err}")),
-                }
+                task!(Bucket::Wails, "nvd", "wails", v, sources::nvd::lookup_cpe_with_key(http, "wailsapp", "wails", v, s.nvd.api_key.as_deref()));
             }
             if s.ghsa.enabled {
-                match sources::ghsa::lookup(
-                    &self.http,
-                    s.ghsa.token.as_deref(),
-                    "go",
-                    "github.com/wailsapp/wails/v2",
-                    v,
-                )
-                .await
-                {
-                    Ok(advisories) => report.wails.extend(advisories),
-                    Err(err) => report.errors.push(format!("[ghsa] wails {v}: {err}")),
-                }
+                task!(Bucket::Wails, "ghsa", "wails", v, sources::ghsa::lookup(http, s.ghsa.token.as_deref(), "go", "github.com/wailsapp/wails/v2", v));
             }
         }
 
         if let Some(v) = &versions.sciter {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "terrainformatica",
-                    "sciter",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.sciter.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] sciter {v}: {err}")),
-                }
+                task!(Bucket::Sciter, "nvd", "sciter", v, sources::nvd::lookup_cpe_with_key(http, "terrainformatica", "sciter", v, s.nvd.api_key.as_deref()));
             }
         }
 
-        // … runtime lookups follow …
-        // (post-processing filter runs at the bottom of this function)
-
         if let Some(v) = &versions.webkit {
             if s.nvd.enabled {
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "apple",
-                    "safari",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.webkit.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] webkit {v}: {err}")),
-                }
+                task!(Bucket::Webkit, "nvd", "webkit", v, sources::nvd::lookup_cpe_with_key(http, "apple", "safari", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Apple", "Safari", v).await {
-                    Ok(advisories) => report.webkit.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] webkit {v}: {err}")),
-                }
+                task!(Bucket::Webkit, "euvd", "webkit", v, sources::euvd::lookup(http, "Apple", "Safari", v));
             }
         }
 
@@ -406,27 +286,17 @@ impl Client_ {
             if s.nvd.enabled {
                 // Oracle JDK is the canonical CPE; OpenJDK advisories are
                 // typically echoed there because they share a codebase.
-                // Vendor-specific CPEs (redhat:openjdk, eclipse:temurin, …)
-                // are a follow-up once we parse IMPLEMENTOR from the JRE
-                // `release` file.
-                match sources::nvd::lookup_cpe_with_key(
-                    &self.http,
-                    "oracle",
-                    "jdk",
-                    v,
-                    s.nvd.api_key.as_deref(),
-                )
-                .await
-                {
-                    Ok(advisories) => report.java.extend(advisories),
-                    Err(err) => report.errors.push(format!("[nvd] java {v}: {err}")),
-                }
+                task!(Bucket::Java, "nvd", "java", v, sources::nvd::lookup_cpe_with_key(http, "oracle", "jdk", v, s.nvd.api_key.as_deref()));
             }
             if s.euvd.enabled {
-                match sources::euvd::lookup(&self.http, "Oracle", "JDK", v).await {
-                    Ok(advisories) => report.java.extend(advisories),
-                    Err(err) => report.errors.push(format!("[euvd] java {v}: {err}")),
-                }
+                task!(Bucket::Java, "euvd", "java", v, sources::euvd::lookup(http, "Oracle", "JDK", v));
+            }
+        }
+
+        for (bucket, prefix, result) in join_all(tasks).await {
+            match result {
+                Ok(advisories) => report.bucket_mut(bucket).extend(advisories),
+                Err(err) => report.errors.push(format!("{prefix}: {err}")),
             }
         }
 

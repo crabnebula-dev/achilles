@@ -75,10 +75,18 @@ fn elf_hardening(exe: &Path) -> ElfHardening {
     use goblin::elf::dynamic::{DF_1_NOW, DF_BIND_NOW, DT_BIND_NOW, DT_FLAGS, DT_FLAGS_1};
     use goblin::elf::program_header::{PF_X, PT_GNU_RELRO, PT_GNU_STACK, PT_INTERP};
 
-    let Ok(bytes) = std::fs::read(exe) else {
+    // mmap rather than read the whole file — these binaries can be 100s of MB
+    // (Electron), and goblin only touches the headers + symbol tables, so we
+    // avoid copying the entire executable into the heap.
+    let Ok(file) = std::fs::File::open(exe) else {
         return ElfHardening::default();
     };
-    let Ok(elf) = goblin::elf::Elf::parse(&bytes) else {
+    // SAFETY: read-only mapping; a concurrent modification could only skew the
+    // parsed flags, no worse than racing any other reader.
+    let Ok(mmap) = (unsafe { memmap2::Mmap::map(&file) }) else {
+        return ElfHardening::default();
+    };
+    let Ok(elf) = goblin::elf::Elf::parse(&mmap) else {
         return ElfHardening::default();
     };
 

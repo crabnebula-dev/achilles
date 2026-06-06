@@ -144,80 +144,87 @@ async function openDetail(det) {
   }
   detailPanel.hidden = false;
 
-  try {
-    const [audit, cves, staticScan, sideeffects] = await Promise.all([
-      invoke("audit", {
-        path: det.path,
-        root: det.root,
-        executable: det.executable ?? null,
-      }).catch((e) => ({ error: String(e) })),
-      invoke("cve_lookup", { versions: det.versions }).catch((e) => ({
-        error: String(e),
-      })),
-      det.framework === "electron"
-        ? invoke("static_scan", { root: det.root }).catch((e) => ({
-            error: String(e),
-          }))
-        : Promise.resolve(null),
-      invoke("sideeffects", {
-        path: det.path,
-        bundleId: det.bundle_id ?? null,
-        executable: det.executable ?? null,
-      }).catch((e) => ({ error: String(e) })),
-    ]);
+  // Only repaint the DOM if this same app is still the open one — guards
+  // against a slower earlier promise overwriting a newer click.
+  const stillOpen = () => !detailPanel.hidden && currentDetail?.path === det.path;
 
-    // Dep advisories need the dep list from static_scan. Kick that off only
-    // if we got a sane static_scan payload.
+  try {
+    // Kick every command off in parallel, but don't await them together: the
+    // local audits (audit / static-scan / side-effects) finish in
+    // milliseconds, while `cve_lookup` and `dependency_scan` are network-bound
+    // (EUVD / OSV / NVD, rate-limited). Paint the local panes first and stream
+    // the CVE sections in, so the panel isn't held on the slowest request.
+    const auditP = invoke("audit", {
+      path: det.path,
+      root: det.root,
+      executable: det.executable ?? null,
+    }).catch((e) => ({ error: String(e) }));
+    const cvesP = invoke("cve_lookup", { versions: det.versions }).catch((e) => ({
+      error: String(e),
+    }));
+    const staticP =
+      det.framework === "electron"
+        ? invoke("static_scan", { root: det.root }).catch((e) => ({ error: String(e) }))
+        : Promise.resolve(null);
+    const sideP = invoke("sideeffects", {
+      path: det.path,
+      bundleId: det.bundle_id ?? null,
+      executable: det.executable ?? null,
+    }).catch((e) => ({ error: String(e) }));
+
+    // 1) First paint — the local panes, with CVEs shown as pending.
+    const [audit, staticScan, sideeffects] = await Promise.all([auditP, staticP, sideP]);
+    const CVES_PENDING = { pending: true };
+    const cache = {
+      detection: det,
+      audit,
+      cves: CVES_PENDING,
+      staticScan,
+      sideeffects,
+      depAdvisories: null,
+      savedAtIso: null,
+    };
+    detailCache.set(det.path, cache);
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(det, audit, CVES_PENDING, staticScan, null, null, sideeffects);
+    }
+
+    // Dep advisories depend only on the static-scan dep list.
     const deps = staticScan && !staticScan.error ? staticScan.dependencies ?? [] : [];
     const depAdvisoriesPromise = deps.length > 0
       ? invoke("dependency_scan", { deps }).catch((e) => ({ error: String(e) }))
       : Promise.resolve([]);
 
-    const firstRender = renderDetail(det, audit, cves, staticScan, null, null, sideeffects);
-    detailBody.innerHTML = firstRender;
-    // Cache what we have now so the Export button works immediately.
-    detailCache.set(det.path, {
+    // 2) Runtime CVEs arrive — repaint (dep advisories may still be pending).
+    const cves = await cvesP;
+    cache.cves = cves;
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(det, audit, cves, staticScan, null, null, sideeffects);
+    }
+
+    // 3) Dep advisories arrive — final repaint + journal persist.
+    const depAdvisories = await depAdvisoriesPromise;
+    cache.depAdvisories = depAdvisories;
+    const savedAtIso = await persistToJournal(det, {
       detection: det,
       audit,
       cves,
       staticScan,
       sideeffects,
-      depAdvisories: null,
-      savedAtIso: null,
+      depAdvisories,
     });
-
-    // Let the caller see the main detail immediately, then fill in the
-    // dep-CVE section once OSV responds.
-    depAdvisoriesPromise.then(async (depAdvisories) => {
-      // Patch the cache regardless; patch the DOM only if the same app is
-      // still open (prevents stale results rendering over a newer click).
-      const cached = detailCache.get(det.path);
-      if (cached) cached.depAdvisories = depAdvisories;
-
-      // Persist the fully-populated detail to the journal. Any failure is
-      // non-fatal; we just log it.
-      const savedAtIso = await persistToJournal(det, {
-        detection: det,
+    if (savedAtIso) cache.savedAtIso = savedAtIso;
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(
+        det,
         audit,
         cves,
         staticScan,
-        sideeffects,
         depAdvisories,
-      });
-      if (cached && savedAtIso) cached.savedAtIso = savedAtIso;
-
-      if (!detailPanel.hidden && currentDetail?.path === det.path) {
-        detailBody.innerHTML = renderDetail(
-          det,
-          audit,
-          cves,
-          staticScan,
-          depAdvisories,
-          savedAtIso,
-          sideeffects,
-        );
-      }
-    });
+        savedAtIso,
+        sideeffects,
+      );
+    }
   } catch (err) {
     detailBody.innerHTML = `<p class="bad">error: ${escapeHtml(err)}</p>`;
   }
@@ -272,6 +279,9 @@ function renderStaticScan(staticScan) {
 
 function renderRuntimeCves(cves) {
   if (!cves) return "";
+  if (cves.pending) {
+    return `<h3>Runtime CVEs</h3><p style="color:var(--fg-2)">looking up advisories…</p>`;
+  }
   if (cves.error) {
     return `<h3>Runtime CVEs</h3><p class="warn">${escapeHtml(cves.error)}</p>`;
   }

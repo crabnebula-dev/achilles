@@ -45,9 +45,7 @@ pub fn apply(webview: Option<&SystemWebview>, versions: &mut Versions) {
     match webview {
         Some(SystemWebview::Webkit(v)) => versions.webkit = Some(v.clone()),
         Some(SystemWebview::Chromium(v)) => {
-            if versions.chromium.is_none() {
-                versions.chromium = Some(v.clone());
-            }
+            versions.chromium.get_or_insert_with(|| v.clone());
         }
         None => {}
     }
