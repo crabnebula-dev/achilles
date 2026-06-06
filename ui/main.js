@@ -8,6 +8,8 @@
 1
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+const { save } = window.__TAURI__.dialog;
+const { writeTextFile } = window.__TAURI__.fs;
 
 const tbody = document.querySelector("#apps tbody");
 const theadRow = document.querySelector("#apps thead tr");
@@ -1076,22 +1078,19 @@ function isoStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-").replace(/Z$/, "Z");
 }
 
-function downloadJson(filename, payload) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
+// Prompt for a path with the native save dialog, then write the JSON there.
+// Returns the chosen path, or null if the user cancelled.
+async function downloadJson(filename, payload) {
+  const path = await save({
+    defaultPath: filename,
+    filters: [{ name: "JSON", extensions: ["json"] }],
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  // Revoke on the next tick to let the browser start the download first.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  if (!path) return null;
+  await writeTextFile(path, JSON.stringify(payload, null, 2));
+  return path;
 }
 
-function exportAll() {
+async function exportAll() {
   const entries = [...rows.values()].map((r) => buildExportEntry(r.detection));
   const fetchedCount = entries.filter(
     (e) =>
@@ -1101,20 +1100,29 @@ function exportAll() {
       e.sideeffects !== null,
   ).length;
   const doc = buildExportDocument(entries);
-  downloadJson(`achilles-${isoStamp()}.json`, doc);
-  setStatus(
-    `exported ${entries.length} apps (${fetchedCount} with full detail)`,
-  );
+  try {
+    const path = await downloadJson(`achilles-${isoStamp()}.json`, doc);
+    if (!path) return;
+    setStatus(
+      `exported ${entries.length} apps (${fetchedCount} with full detail)`,
+    );
+  } catch (e) {
+    setStatus(`export failed: ${e}`);
+  }
 }
 
-function exportDetail() {
+async function exportDetail() {
   if (!currentDetail) return;
   const entry = buildExportEntry(currentDetail);
   const doc = buildExportDocument([entry]);
   const slug = slugify(
     currentDetail.display_name || currentDetail.bundle_id || "app",
   );
-  downloadJson(`achilles-${slug}-${isoStamp()}.json`, doc);
+  try {
+    await downloadJson(`achilles-${slug}-${isoStamp()}.json`, doc);
+  } catch (e) {
+    setStatus(`export failed: ${e}`);
+  }
 }
 
 document.querySelector("#export-all").addEventListener("click", exportAll);

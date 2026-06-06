@@ -8,6 +8,8 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "updater:default",
-    "process:default"
+    "process:default",
+    "dialog:allow-save",
+    "fs:allow-write-text-file"
   ]
 }
