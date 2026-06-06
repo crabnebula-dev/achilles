@@ -22,6 +22,12 @@ html, body {
   font: 13px/1.5 system-ui, -apple-system, sans-serif;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 header {
   display: flex;
   align-items: center;
@@ -81,7 +87,8 @@ button:disabled:hover { border-color: transparent; }
 main {
   display: grid;
   grid-template-columns: 1fr;
-  height: calc(100% - 41px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
