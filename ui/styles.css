@@ -110,9 +110,69 @@ thead th {
   z-index: 1;
 }
 
+/* Header filter controls. `position: sticky` already establishes a containing
+   block, so the per-column popover anchors to its th. */
+.th-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.th-label { flex: 1; }
+
+.th-filter-btn,
+.th-clear-btn {
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--fg-2);
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.th-filter-btn:hover,
+.th-clear-btn:hover {
+  border: none;
+  color: var(--accent);
+}
+
+thead th.filtered { color: var(--accent); }
+thead th.filtered .th-filter-btn { color: var(--accent); }
+
+/* Floated above the trigger button; coordinates are set by positionPopover()
+   in main.js so it can escape the scroll container's clipping. */
+.th-popover {
+  position: fixed;
+  padding: 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+.th-popover[hidden] { display: none; }
+
+.th-popover input,
+.th-popover select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--bg-3);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 tbody td {
   padding: 5px 10px;
   border-bottom: 1px solid var(--bg-2);
+}
+
+/* Inset the last column so its filter trigger isn't overlapped by the
+   vertical scrollbar of #list-panel. */
+#apps thead th:last-child,
+#apps tbody td:last-child {
+  padding-right: 20px;
 }
 
 tbody tr { cursor: pointer; }

@@ -5,11 +5,12 @@
 //      installed GUI apps (per-OS) and emits `scan_event` per app.
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
-
+1
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const tbody = document.querySelector("#apps tbody");
+const theadRow = document.querySelector("#apps thead tr");
 const statusEl = document.querySelector("#status");
 const rescanBtn = document.querySelector("#rescan");
 const detailPanel = document.querySelector("#detail-panel");
@@ -115,7 +116,204 @@ function handleDetection(det) {
     tbody.appendChild(fresh);
   }
   rows.set(det.path, { row: fresh, detection: det });
+  fresh.hidden = !rowMatches(det);
 }
+
+// ---------- column filters ----------
+// Each column gets a header control: the App column opens a free-text search
+// box; the rest open a <select> populated from the distinct values currently
+// present in the table. An active filter reveals a "×" to clear it.
+
+const COLUMNS = [
+  { key: "name", label: "App", type: "search" },
+  { key: "framework", label: "Framework", type: "select" },
+  { key: "electron", label: "Electron", type: "select" },
+  { key: "chromium", label: "Chromium", type: "select" },
+  { key: "node", label: "Node", type: "select" },
+  { key: "tauri", label: "Tauri", type: "select" },
+  { key: "cef", label: "CEF", type: "select" },
+  { key: "risk", label: "Risk", type: "select" },
+];
+
+/** Active filters: column key → filter string (substring for search, exact for select). */
+const activeFilters = new Map();
+
+/** Header cell handles, keyed by column key, for live state updates. */
+const headerCells = new Map();
+
+/** The displayed value for a detection in a given column (matches renderRow). */
+function cellValue(det, key) {
+  const v = det.versions;
+  switch (key) {
+    case "name":
+      return det.display_name || det.bundle_id || det.path || "";
+    case "framework":
+      return det.framework || "";
+    case "risk":
+      return isStale(det.framework, v);
+    default:
+      return v[key] ?? "";
+  }
+}
+
+/** Distinct, non-empty values for a column across all known rows, sorted. */
+function distinctValues(key) {
+  const set = new Set();
+  for (const { detection } of rows.values()) {
+    const val = cellValue(detection, key);
+    if (val !== "" && val != null) set.add(String(val));
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function rowMatches(det) {
+  for (const [key, val] of activeFilters) {
+    const cell = String(cellValue(det, key) ?? "");
+    const col = COLUMNS.find((c) => c.key === key);
+    if (col?.type === "search") {
+      if (!cell.toLowerCase().includes(val.toLowerCase())) return false;
+    } else if (cell !== val) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function applyFilters() {
+  for (const { row, detection } of rows.values()) {
+    row.hidden = !rowMatches(detection);
+  }
+}
+
+function setFilter(key, value) {
+  const v = (value ?? "").trim();
+  if (v) activeFilters.set(key, v);
+  else activeFilters.delete(key);
+  updateHeaderState();
+  applyFilters();
+}
+
+function updateHeaderState() {
+  for (const [key, { th, clearBtn }] of headerCells) {
+    const active = activeFilters.has(key);
+    th.classList.toggle("filtered", active);
+    clearBtn.hidden = !active;
+  }
+}
+
+function closeAllPopovers() {
+  for (const { popover } of headerCells.values()) popover.hidden = true;
+}
+
+// Anchor the popover just above the trigger button. It's `position: fixed`
+// (viewport coordinates) so it can float above the sticky header without being
+// clipped by #list-panel's `overflow: auto`.
+function positionPopover(popover, anchorBtn) {
+  const r = anchorBtn.getBoundingClientRect();
+  const pr = popover.getBoundingClientRect();
+  const left = Math.max(6, Math.min(r.left, window.innerWidth - pr.width - 6));
+  const top = Math.max(6, r.top - pr.height - 4);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function openPopover(col, popover, anchorBtn) {
+  const wasOpen = !popover.hidden;
+  closeAllPopovers();
+  if (wasOpen) return; // toggle: a second click on the same column closes it
+
+  popover.replaceChildren();
+  let field;
+
+  if (col.type === "search") {
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = "app name…";
+    input.value = activeFilters.get(col.key) ?? "";
+    input.addEventListener("input", () => setFilter(col.key, input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === "Escape") closeAllPopovers();
+    });
+    popover.appendChild(input);
+    field = input;
+  } else {
+    const select = document.createElement("select");
+    select.appendChild(new Option("(all)", ""));
+    for (const val of distinctValues(col.key)) {
+      select.appendChild(new Option(val, val));
+    }
+    select.value = activeFilters.get(col.key) ?? "";
+    select.addEventListener("change", () => {
+      setFilter(col.key, select.value);
+      closeAllPopovers();
+    });
+    popover.appendChild(select);
+    field = select;
+  }
+
+  popover.hidden = false;
+  positionPopover(popover, anchorBtn);
+  field.focus();
+}
+
+function buildHeader() {
+  theadRow.replaceChildren();
+  headerCells.clear();
+
+  for (const col of COLUMNS) {
+    const th = document.createElement("th");
+
+    const inner = document.createElement("div");
+    inner.className = "th-inner";
+
+    const label = document.createElement("span");
+    label.className = "th-label";
+    label.textContent = col.label;
+
+    const filterBtn = document.createElement("button");
+    filterBtn.type = "button";
+    filterBtn.className = "th-filter-btn";
+    filterBtn.title = col.type === "search" ? "Search by name" : "Filter";
+    filterBtn.textContent = col.type === "search" ? "⌕" : "▾";
+
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "th-clear-btn";
+    clearBtn.title = "Clear filter";
+    clearBtn.textContent = "×";
+    clearBtn.hidden = true;
+
+    const popover = document.createElement("div");
+    popover.className = "th-popover";
+    popover.hidden = true;
+
+    filterBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPopover(col, popover, filterBtn);
+    });
+    clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setFilter(col.key, "");
+      closeAllPopovers();
+    });
+
+    inner.append(label, filterBtn, clearBtn);
+    th.append(inner);
+    theadRow.appendChild(th);
+    // The popover lives on <body>, not inside the th: the sticky header cells
+    // each create a `z-index: 1` stacking context, which would otherwise pin
+    // the popover beneath the header. As a top-level fixed element it's free to
+    // float above everything (positioned by positionPopover()).
+    document.body.appendChild(popover);
+    headerCells.set(col.key, { th, clearBtn, popover });
+  }
+}
+
+// Close any open popover when clicking outside it (the trigger/clear buttons
+// stop propagation, so their own clicks never reach here).
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".th-popover")) closeAllPopovers();
+});
 
 async function openDetail(det) {
   document
@@ -944,6 +1142,7 @@ listen("scan_event", ({ payload }) => {
     case "finished":
       setStatus(`done: ${payload.count} bundles`);
       sortRowsInto(tbody);
+      applyFilters();
       break;
   }
 });
@@ -1070,5 +1269,6 @@ updateDismissBtn.addEventListener("click", () => {
   pendingUpdate = null;
 });
 
+buildHeader();
 startScan();
 void checkForUpdates();
