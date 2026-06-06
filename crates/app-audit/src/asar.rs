@@ -39,9 +39,38 @@ pub struct AsarIntegrityCheck {
     pub matches: bool,
 }
 
+/// Informational ASAR report for Windows / Linux, where there's no
+/// Info.plist-declared baseline to compare against (Electron's fuse-based
+/// integrity lives in the binary and is rarely enabled). We surface the
+/// archive's header hash so users can compare it across versions / machines.
+#[derive(Debug, Clone, Serialize)]
+pub struct AsarInfo {
+    /// Absolute path of `resources/app.asar`.
+    pub archive_path: PathBuf,
+    /// SHA-256 of the ASAR header JSON (same digest macOS declares), or `None`
+    /// if the archive couldn't be read.
+    pub header_sha256: Option<String>,
+}
+
+/// Build an [`AsarInfo`] for the Windows / Linux `resources/app.asar` under
+/// `root`, or `None` when the app ships no asar.
+#[cfg(not(target_os = "macos"))]
+pub fn info(root: &Path) -> Option<AsarInfo> {
+    let archive_path = root.join("resources").join("app.asar");
+    if !archive_path.is_file() {
+        return None;
+    }
+    let header_sha256 = sha256_asar_header(&archive_path).ok();
+    Some(AsarInfo {
+        archive_path,
+        header_sha256,
+    })
+}
+
 /// Returns `None` if the bundle has no `ElectronAsarIntegrity` entry (i.e.
 /// it's not an Electron app, or it's an Electron app with integrity
-/// disabled).
+/// disabled). macOS-only: the declared hash lives in `Contents/Info.plist`.
+#[cfg(target_os = "macos")]
 pub fn verify_all(app_path: &Path) -> Option<Vec<AsarIntegrityCheck>> {
     let plist_path = app_path.join("Contents/Info.plist");
     let value = plist::Value::from_file(&plist_path).ok()?;

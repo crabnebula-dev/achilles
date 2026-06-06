@@ -1,9 +1,10 @@
 # Achilles
 
-A desktop app that scans your `/Applications` folder and tells you which
-installed apps ship outdated runtimes, weakened hardened-runtime entitlements,
-or known-CVE versions of Electron, Tauri, Chromium, Node.js, Flutter, Qt,
-WKWebView, and eight other runtimes it detects.
+A desktop app that scans the GUI applications installed on your machine —
+across **macOS, Windows, and Linux** — and tells you which ones ship outdated
+runtimes, weakened process-hardening flags, or known-CVE versions of Electron,
+Tauri, Chromium, Node.js, Flutter, Qt, WebView, and eight other runtimes it
+detects.
 
 ## Download the Beta - for Free!!!
 
@@ -18,59 +19,89 @@ best.
 Built as a Tauri 2 app, so you can see what a ~5 MB alternative to the 100 MB
 Electron apps it audits actually looks like.
 
-> **Status: alpha, macOS-only.** Detection is reliable against the handful of
-> apps tested (Discord, Signal, 1Password, VS Code, Claude, HyperMeet, Zephyr
-> Agency). Severity scoring is deliberately simple — this is a
-> "risk indicator" tool, not a verdict.
+> **Status: beta, cross-platform.** macOS is the most battle-tested path;
+> Windows and Linux discovery + detection are newer. Detection is reliable
+> against the apps tested (Discord, Signal, 1Password, VS Code, Code-OSS,
+> Cursor, GitKraken, Chrome, and assorted Qt/GTK apps). Severity scoring is
+> deliberately simple — this is a "risk indicator" tool, not a verdict.
 
 ## Quickstart
 
-Requirements: Rust 1.80+, macOS 12+. The GUI needs nothing else to run.
+Requirements: Rust 1.80+. macOS 12+, Windows 10+, or a Linux desktop. The GUI
+needs nothing else to run.
 
 ```sh
 cargo run -p achilles
 ```
 
-The window opens, a scan kicks off automatically, and rows stream in as
-bundles are detected. Click any row for a full audit + CVE lookup.
+The window opens, a scan kicks off automatically, and rows stream in as apps
+are detected. Click any row for a full audit + CVE lookup.
 
-If you just want the CLI outputs:
+If you just want the CLI outputs (pass a `.app` on macOS, or an executable on
+Windows / Linux):
 
 ```sh
+# macOS
 cargo run -p detect --example detect -- "/Applications/Signal.app"
+# Linux
+cargo run -p detect --example detect -- "/usr/lib/electron39/electron"
+# Windows
+cargo run -p detect --example detect -- "C:\Users\me\AppData\Local\Programs\app\app.exe"
+
 cargo run -p scan --example scan
-cargo run -p macho-audit --example audit -- "/Applications/Signal.app"
+cargo run -p app-audit --example audit -- <path-to-app-or-exe>
 cargo run -p cve --example lookup -- electron 40.4.1 npm
-cargo run -p static-scan --example static-scan -- \
-  "/Applications/Signal.app/Contents/Resources/app.asar"
+cargo run -p sideeffects --example sideeffects -- <path-to-app-or-exe>
 ```
+
+## How discovery works
+
+Discovery is platform-specific but converges on a list of GUI apps — it
+deliberately avoids listing the pile of CLI tools a system ships with:
+
+- **macOS**: Spotlight (`mdfind`) enumerates `.app` bundles in standard install
+  roots (`/Applications`, `/System/Applications`, `~/Applications`), with a
+  filesystem-walk fallback.
+- **Linux**: freedesktop `.desktop` entries (the application menu) — already
+  GUI-only — resolved to their executables. Launcher shell-scripts in
+  `/usr/bin` are followed to the real binary (so Chrome, VS Code, and the
+  shared `electronNN` runtimes resolve correctly).
+- **Windows**: Start Menu `.lnk` shortcuts (a natural GUI filter) plus per-user
+  `%LOCALAPPDATA%\Programs` installs, resolved to their target `.exe`.
 
 ## What it detects
 
-For every bundle in standard install locations (`/Applications`,
-`/System/Applications`, `~/Applications`) it extracts:
+For every discovered app it extracts:
 
 - **Framework**: one of Electron, Tauri, NW.js, Flutter, Qt, React Native,
-  Wails, Sciter, Java, CEF, ChromiumBrowser, or native Cocoa — with a
-  confidence rating (high/medium/low). Secondary signals (CEF, QtWebEngine
-  Chromium, Hermes, …) are reported alongside the primary verdict, so a
-  Tauri app that *also* bundles CEF shows both.
+  Wails, Sciter, Java, CEF, ChromiumBrowser, or native — with a confidence
+  rating (high/medium/low). Secondary signals (CEF, QtWebEngine Chromium,
+  Hermes, …) are reported alongside the primary verdict, so a Tauri app that
+  *also* bundles CEF shows both.
 - **Runtime versions** surfaced: `electron`, `chromium`, `node`, `tauri`,
-  `cef`, `nwjs`, `flutter`, `qt`, `react_native`, `wails`, `sciter`, `java`
-  — pulled from framework Info.plists, the main Mach-O's string table, or
-  bundled `release` files as appropriate.
-- **Hardened-runtime entitlements**: the load-bearing ones
-  (`allow-jit`, `allow-unsigned-executable-memory`,
-  `disable-executable-page-protection`, `allow-dyld-environment-variables`,
-  `disable-library-validation`, `get-task-allow`).
-- **Code signature**: signing authority chain, Team ID, hardened-runtime
-  flag, notarization staple.
-- **Info.plist hardening**: `NSAllowsArbitraryLoads`, registered URL
-  schemes, per-domain TLS exceptions.
-- **ASAR integrity**: declared hash from `ElectronAsarIntegrity`, the actual
-  hash of `Contents/Resources/app.asar` (Electron hashes the JSON header, not
-  the whole file — we match that), and a boolean telling you whether the
-  archive was modified after signing.
+  `cef`, `nwjs`, `flutter`, `qt`, `react_native`, `wails`, `sciter`, `java`,
+  `webkit` — pulled from framework Info.plists (macOS), the executable's
+  string table (cross-platform: the `Electron/`, `Chrome/`, `node-v`,
+  `tauri-X.Y.Z` literals appear verbatim in Mach-O, PE, and ELF alike), the
+  binary's import table (which `.dll` / `.so` framework libraries it links),
+  or bundled `release` files.
+- **Process hardening** — platform-appropriate:
+  - **macOS**: hardened-runtime entitlements (`allow-jit`,
+    `allow-unsigned-executable-memory`, `disable-library-validation`, …),
+    the `codesign` authority chain / Team ID / notarization staple, and
+    Info.plist flags (`NSAllowsArbitraryLoads`, URL schemes, TLS exceptions).
+  - **Windows**: the Authenticode signature — presence, the signer certificate
+    (subject + issuer, parsed from the embedded PKCS#7), and OS-trust-store
+    verification (`WinVerifyTrust`) — plus PE mitigation flags (ASLR / DEP /
+    Control Flow Guard / high-entropy ASLR) and the manifest's requested
+    execution level.
+  - **Linux**: ELF hardening (PIE / RELRO / NX / stack-canary / FORTIFY) and,
+    for flatpak/snap apps, the declared sandbox permissions.
+- **ASAR integrity** (Electron): on macOS, the declared `ElectronAsarIntegrity`
+  hash vs. the actual hash of `Contents/Resources/app.asar` (Electron hashes
+  the JSON header, not the whole file — we match that), and whether the archive
+  was modified after signing. On Windows/Linux there's no signed baseline, so
+  we surface the archive's header hash informationally.
 - **Runtime CVEs** for every detected runtime, via four user-toggleable
   sources:
 
@@ -88,17 +119,18 @@ For every bundle in standard install locations (`/Applications`,
   return decades of history. Set to `0` to disable. Advisories without a
   publication date are never filtered.
 
-  Settings live at `~/Library/Application Support/achilles/settings.json`
-  with mode 0600 on Unix.
+  Settings live in the platform config dir (`dirs::config_dir()` — e.g.
+  `~/Library/Application Support` on macOS, `%APPDATA%` on Windows, `~/.config`
+  on Linux) at `achilles/settings.json`, with mode 0600 on Unix.
 
   Everything is cached on disk for 24 hours in
-  `~/Library/Caches/achilles/cve/`. Historical CVE data is immutable
+  `<cache-dir>/achilles/cve/`. Historical CVE data is immutable
   once published, so repeat scans only pay for newly-seen versions.
 
 - **Results journal**: every time a detail view finishes fetching, the
   merged payload (detection + audit + CVEs + static-scan + dep advisories)
   is written as a timestamped JSON file under
-  `~/Library/Application Support/achilles/journal/<slug>/<iso-timestamp>.json`.
+  `<data-dir>/achilles/journal/<slug>/<iso-timestamp>.json`.
   Re-opening a row in the same session shows the prior payload instantly
   from the in-process cache; a small "fetched Nm ago" badge at the top of
   the detail panel surfaces the save time. No pruning — users can delete
@@ -116,16 +148,19 @@ For every bundle in standard install locations (`/Applications`,
   JSON document. No Tauri plugin required — it's a plain Blob download.
 
 - **System side effects** (`crates/sideeffects`): for each app, enumerates
-  things it installs *outside* its own bundle:
-  - Helpers / plugins / XPC services inside `Contents/Helpers`,
-    `Contents/PlugIns`, `Contents/XPCServices`
-  - **Native-messaging-host manifests** dropped into every Chromium-based
-    browser profile (`NativeMessagingHosts/*.json`) whose `path` points
-    back into the bundle — including allowed extension IDs and install
-    timestamps
-  - **`launchd` agents / daemons** (user + global + system scope) whose
-    `Program`/`ProgramArguments` reference the bundle
-  - `~/Library/Logs/<app>/` directory size and last-modified
+  things it installs *outside* its own install location, with a per-OS backend:
+  - **Bundled helpers / sibling executables** — macOS `Contents/Helpers` /
+    `PlugIns` / `XPCServices`, or the helper `.exe`s / binaries beside the
+    main executable on Windows / Linux
+  - **Native-messaging-host manifests** registered for every Chromium-based
+    browser (and Firefox) whose `path` points back into the app — macOS
+    `~/Library/Application Support`, Windows registry, Linux `~/.config` /
+    `~/.mozilla` — including allowed extension IDs
+  - **Auto-start / background entries** referencing the app — `launchd` agents
+    & daemons (macOS), `Run` keys + Startup-folder shortcuts + Task Scheduler
+    tasks (Windows), autostart `.desktop` entries + systemd user units (Linux)
+  - the app's out-of-place **log / data directory** (macOS `~/Library/Logs`,
+    Windows `%LOCALAPPDATA%`/`%APPDATA%`, Linux `~/.config` / `~/.local/share`)
 
   Surfaces categories of silent system modification that bundle-only audits
   miss. Inspired by [thatprivacyguy.com][tpg-article]'s investigation of
@@ -164,12 +199,12 @@ For every bundle in standard install locations (`/Applications`,
 │    commands::dependency_scan         │
 └─┬────────────────────────────────────┘
   │
-  ├─ crates/detect        framework + version extraction (Mach-O string scan)
-  ├─ crates/scan          mdfind + concurrent detect(), streams ScanEvent
+  ├─ crates/detect        framework + version extraction (PE/ELF/Mach-O scan)
+  ├─ crates/scan          per-OS discovery + concurrent detect(), streams ScanEvent
   ├─ crates/cve           EUVD + OSV + NVD + GHSA client with disk cache
-  ├─ crates/macho-audit   entitlements / codesign / Info.plist / ASAR integrity
+  ├─ crates/app-audit     per-OS signing / hardening / ASAR integrity
   ├─ crates/static-scan   ASAR reader + oxc AST rule engine (RAST)
-  └─ crates/sideeffects   enumerate out-of-bundle installs: browser bridges,
+  └─ crates/sideeffects   enumerate out-of-place installs: browser bridges,
                           launch agents, helpers, log directories
 ```
 
@@ -219,12 +254,14 @@ cargo run -p static-scan --example static-scan -- \
 
 ## Known limitations
 
-- **macOS only.** `scan::discover_applications` shells to `mdfind`;
-  `macho-audit` shells to `codesign` and parses Info.plist. The same audits
-  on Windows/Linux need different plumbing — tracked as a v2 concern.
+- **Platform maturity varies.** macOS is the most-tested path.
+  On Linux, apps that share a system Electron runtime
+  (`/usr/lib/electronNN/electron`) are detected via that runtime, so per-app
+  ASAR/resource signals can be missed; flatpak apps invoked via `flatpak run`
+  don't yet resolve to a unique per-app binary.
 - **NVD rate limits.** Without an API key, NVD allows ~5 requests per 30
   seconds. The on-disk cache (24h TTL) turns most queries into cache hits,
-  but the *first* scan of a diverse `/Applications` folder will pause
+  but the *first* scan of a diverse app set will pause
   briefly between unique Chromium / Node.js versions. Add
   `NVD_API_KEY=<key>` handling in `sources/nvd.rs` if you need faster
   fresh scans.
@@ -280,7 +317,7 @@ The codebase is small enough that reading `crates/detect/src/lib.rs` and
 `src-tauri/src/commands.rs` is the fastest way to get oriented. Bugs and
 false positives against real-world bundles are the most useful thing to
 file — the detection rules were tuned against ~20 apps, and anything that
-ships a weirder Mach-O layout will trip them.
+ships a weirder binary layout will trip them.
 
 ## Acknowledgments
 

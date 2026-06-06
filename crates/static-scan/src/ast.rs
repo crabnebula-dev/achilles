@@ -76,7 +76,8 @@ impl<'a, 'alloc> Visit<'alloc> for BoolPropertyVisitor<'a> {
     fn visit_object_expression(&mut self, obj: &ObjectExpression<'alloc>) {
         for prop in &obj.properties {
             if let ObjectPropertyKind::ObjectProperty(p) = prop {
-                if prop_key_matches(&p.key, self.target_key) && bool_expr_is(&p.value, self.target_value)
+                if prop_key_matches(&p.key, self.target_key)
+                    && bool_expr_is(&p.value, self.target_value)
                 {
                     self.matches.push(AstMatch::new(p.span, self.note));
                 }
@@ -155,7 +156,10 @@ fn is_call_like(expr: &Expression<'_>, left: &str, right: &str) -> bool {
 }
 
 fn is_plain_string_arg(arg: &Argument<'_>) -> bool {
-    matches!(arg, Argument::StringLiteral(_) | Argument::TemplateLiteral(_))
+    matches!(
+        arg,
+        Argument::StringLiteral(_) | Argument::TemplateLiteral(_)
+    )
 }
 
 // Public getter so the scanner can ignore object-property matches that

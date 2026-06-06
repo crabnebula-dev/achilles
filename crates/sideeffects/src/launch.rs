@@ -7,35 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LaunchScope {
-    /// `~/Library/LaunchAgents/` — runs on user login.
-    UserAgent,
-    /// `/Library/LaunchAgents/` — runs on every user's login (needs admin).
-    GlobalAgent,
-    /// `/Library/LaunchDaemons/` — runs as root at boot.
-    Daemon,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LaunchEntry {
-    pub scope: LaunchScope,
-    /// The plist file on disk.
-    pub plist_path: PathBuf,
-    /// `Label` key — the reverse-DNS identifier used by `launchctl`.
-    pub label: Option<String>,
-    /// The executable path referenced. Either `Program` or
-    /// `ProgramArguments[0]`.
-    pub program: String,
-    /// `RunAtLoad` — runs immediately on registration?
-    pub run_at_load: bool,
-    /// `KeepAlive` set to true — resurrects if it dies?
-    pub keep_alive: bool,
-    pub modified_at: Option<u64>,
-}
+use crate::types::{LaunchEntry, LaunchScope};
 
 pub fn scan(app_path: &Path, executable: Option<&Path>) -> Vec<LaunchEntry> {
     let app_str = app_path.to_string_lossy().into_owned();
@@ -48,7 +20,10 @@ pub fn scan(app_path: &Path, executable: Option<&Path>) -> Vec<LaunchEntry> {
             PathBuf::from(&home).join("Library/LaunchAgents"),
         ));
     }
-    dirs.push((LaunchScope::GlobalAgent, PathBuf::from("/Library/LaunchAgents")));
+    dirs.push((
+        LaunchScope::GlobalAgent,
+        PathBuf::from("/Library/LaunchAgents"),
+    ));
     dirs.push((LaunchScope::Daemon, PathBuf::from("/Library/LaunchDaemons")));
 
     let mut out = Vec::new();
@@ -90,8 +65,7 @@ pub fn scan(app_path: &Path, executable: Option<&Path>) -> Vec<LaunchEntry> {
                 .unwrap_or(false);
             let keep_alive = matches!(
                 dict.get("KeepAlive"),
-                Some(plist::Value::Boolean(true))
-                    | Some(plist::Value::Dictionary(_)) /* dict-form = conditional KeepAlive */
+                Some(plist::Value::Boolean(true)) | Some(plist::Value::Dictionary(_)) /* dict-form = conditional KeepAlive */
             );
             let modified_at = fs::metadata(&path)
                 .and_then(|m| m.modified())

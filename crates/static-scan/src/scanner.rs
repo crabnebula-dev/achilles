@@ -22,14 +22,7 @@ pub fn interesting_extension(path: &str) -> bool {
     extension_of(path).map_or(false, |ext| {
         matches!(
             ext,
-            "js" | "mjs"
-                | "cjs"
-                | "ts"
-                | "tsx"
-                | "jsx"
-                | "html"
-                | "htm"
-                | "json"
+            "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "html" | "htm" | "json"
         )
     })
 }

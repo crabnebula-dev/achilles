@@ -47,7 +47,10 @@ pub fn read(app_path: &Path) -> InfoPlistFlags {
         ..Default::default()
     };
 
-    if let Some(ats) = dict.get("NSAppTransportSecurity").and_then(|v| v.as_dictionary()) {
+    if let Some(ats) = dict
+        .get("NSAppTransportSecurity")
+        .and_then(|v| v.as_dictionary())
+    {
         flags.allows_arbitrary_loads = ats
             .get("NSAllowsArbitraryLoads")
             .and_then(|v| v.as_boolean())

@@ -1,8 +1,8 @@
 // Achilles frontend — vanilla ES modules, no bundler.
 //
 // Flow:
-//   1. On boot, invoke `scan` which kicks off a background walk of
-//      /Applications and emits `scan_event` per bundle.
+//   1. On boot, invoke `scan` which kicks off background discovery of
+//      installed GUI apps (per-OS) and emits `scan_event` per app.
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
 
@@ -144,76 +144,87 @@ async function openDetail(det) {
   }
   detailPanel.hidden = false;
 
-  try {
-    const [audit, cves, staticScan, sideeffects] = await Promise.all([
-      invoke("audit", { path: det.path }).catch((e) => ({ error: String(e) })),
-      invoke("cve_lookup", { versions: det.versions }).catch((e) => ({
-        error: String(e),
-      })),
-      det.framework === "electron"
-        ? invoke("static_scan", { path: det.path }).catch((e) => ({
-            error: String(e),
-          }))
-        : Promise.resolve(null),
-      invoke("sideeffects", {
-        path: det.path,
-        bundleId: det.bundle_id ?? null,
-        executable: null,
-      }).catch((e) => ({ error: String(e) })),
-    ]);
+  // Only repaint the DOM if this same app is still the open one — guards
+  // against a slower earlier promise overwriting a newer click.
+  const stillOpen = () => !detailPanel.hidden && currentDetail?.path === det.path;
 
-    // Dep advisories need the dep list from static_scan. Kick that off only
-    // if we got a sane static_scan payload.
+  try {
+    // Kick every command off in parallel, but don't await them together: the
+    // local audits (audit / static-scan / side-effects) finish in
+    // milliseconds, while `cve_lookup` and `dependency_scan` are network-bound
+    // (EUVD / OSV / NVD, rate-limited). Paint the local panes first and stream
+    // the CVE sections in, so the panel isn't held on the slowest request.
+    const auditP = invoke("audit", {
+      path: det.path,
+      root: det.root,
+      executable: det.executable ?? null,
+    }).catch((e) => ({ error: String(e) }));
+    const cvesP = invoke("cve_lookup", { versions: det.versions }).catch((e) => ({
+      error: String(e),
+    }));
+    const staticP =
+      det.framework === "electron"
+        ? invoke("static_scan", { root: det.root }).catch((e) => ({ error: String(e) }))
+        : Promise.resolve(null);
+    const sideP = invoke("sideeffects", {
+      path: det.path,
+      bundleId: det.bundle_id ?? null,
+      executable: det.executable ?? null,
+    }).catch((e) => ({ error: String(e) }));
+
+    // 1) First paint — the local panes, with CVEs shown as pending.
+    const [audit, staticScan, sideeffects] = await Promise.all([auditP, staticP, sideP]);
+    const CVES_PENDING = { pending: true };
+    const cache = {
+      detection: det,
+      audit,
+      cves: CVES_PENDING,
+      staticScan,
+      sideeffects,
+      depAdvisories: null,
+      savedAtIso: null,
+    };
+    detailCache.set(det.path, cache);
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(det, audit, CVES_PENDING, staticScan, null, null, sideeffects);
+    }
+
+    // Dep advisories depend only on the static-scan dep list.
     const deps = staticScan && !staticScan.error ? staticScan.dependencies ?? [] : [];
     const depAdvisoriesPromise = deps.length > 0
       ? invoke("dependency_scan", { deps }).catch((e) => ({ error: String(e) }))
       : Promise.resolve([]);
 
-    const firstRender = renderDetail(det, audit, cves, staticScan, null, null, sideeffects);
-    detailBody.innerHTML = firstRender;
-    // Cache what we have now so the Export button works immediately.
-    detailCache.set(det.path, {
+    // 2) Runtime CVEs arrive — repaint (dep advisories may still be pending).
+    const cves = await cvesP;
+    cache.cves = cves;
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(det, audit, cves, staticScan, null, null, sideeffects);
+    }
+
+    // 3) Dep advisories arrive — final repaint + journal persist.
+    const depAdvisories = await depAdvisoriesPromise;
+    cache.depAdvisories = depAdvisories;
+    const savedAtIso = await persistToJournal(det, {
       detection: det,
       audit,
       cves,
       staticScan,
       sideeffects,
-      depAdvisories: null,
-      savedAtIso: null,
+      depAdvisories,
     });
-
-    // Let the caller see the main detail immediately, then fill in the
-    // dep-CVE section once OSV responds.
-    depAdvisoriesPromise.then(async (depAdvisories) => {
-      // Patch the cache regardless; patch the DOM only if the same app is
-      // still open (prevents stale results rendering over a newer click).
-      const cached = detailCache.get(det.path);
-      if (cached) cached.depAdvisories = depAdvisories;
-
-      // Persist the fully-populated detail to the journal. Any failure is
-      // non-fatal; we just log it.
-      const savedAtIso = await persistToJournal(det, {
-        detection: det,
+    if (savedAtIso) cache.savedAtIso = savedAtIso;
+    if (stillOpen()) {
+      detailBody.innerHTML = renderDetail(
+        det,
         audit,
         cves,
         staticScan,
-        sideeffects,
         depAdvisories,
-      });
-      if (cached && savedAtIso) cached.savedAtIso = savedAtIso;
-
-      if (!detailPanel.hidden && currentDetail?.path === det.path) {
-        detailBody.innerHTML = renderDetail(
-          det,
-          audit,
-          cves,
-          staticScan,
-          depAdvisories,
-          savedAtIso,
-          sideeffects,
-        );
-      }
-    });
+        savedAtIso,
+        sideeffects,
+      );
+    }
   } catch (err) {
     detailBody.innerHTML = `<p class="bad">error: ${escapeHtml(err)}</p>`;
   }
@@ -268,6 +279,9 @@ function renderStaticScan(staticScan) {
 
 function renderRuntimeCves(cves) {
   if (!cves) return "";
+  if (cves.pending) {
+    return `<h3>Runtime CVEs</h3><p style="color:var(--fg-2)">looking up advisories…</p>`;
+  }
   if (cves.error) {
     return `<h3>Runtime CVEs</h3><p class="warn">${escapeHtml(cves.error)}</p>`;
   }
@@ -391,6 +405,140 @@ function formatRelativeTime(iso) {
   return `${Math.floor(delta / 86_400)}d ago`;
 }
 
+/**
+ * Render the platform-tagged audit payload. Returns an array of HTML strings.
+ * The `platform` discriminant selects which fields are present.
+ */
+function renderAudit(audit) {
+  switch (audit.platform) {
+    case "windows":
+      return renderWindowsAudit(audit);
+    case "linux":
+      return renderLinuxAudit(audit);
+    case "macos":
+    default:
+      return renderMacosAudit(audit);
+  }
+}
+
+function renderMacosAudit(audit) {
+  const parts = [];
+  const e = audit.entitlements;
+  const ip = audit.info_plist;
+  const cs = audit.code_signature;
+
+  parts.push(`<h3>Code signature</h3>`);
+  parts.push(`<dl>
+    <dt>signed</dt><dd>${yesNo(cs.signed, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>
+    <dt>hardened runtime</dt><dd>${yesNo(cs.hardened_runtime, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>notarized</dt><dd>${yesNo(cs.notarized, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>team id</dt><dd>${escapeHtml(cs.team_identifier ?? "—")}</dd>
+  </dl>`);
+
+  parts.push(`<h3>Hardened-runtime entitlements</h3>`);
+  parts.push(`<dl>
+    <dt>allow-jit</dt><dd>${yesNo(e.allow_jit, { yesClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>allow-unsigned-executable-memory</dt><dd>${yesNo(e.allow_unsigned_executable_memory)}</dd>
+    <dt>disable-executable-page-protection</dt><dd>${yesNo(e.disable_executable_page_protection)}</dd>
+    <dt>allow-dyld-environment-variables</dt><dd>${yesNo(e.allow_dyld_environment_variables)}</dd>
+    <dt>disable-library-validation</dt><dd>${yesNo(e.disable_library_validation)}</dd>
+    <dt>get-task-allow (debug)</dt><dd>${yesNo(e.get_task_allow)}</dd>
+  </dl>`);
+
+  parts.push(`<h3>Info.plist hardening</h3>`);
+  parts.push(`<dl>
+    <dt>allows arbitrary loads</dt><dd>${yesNo(ip.allows_arbitrary_loads)}</dd>
+    <dt>url schemes</dt><dd>${ip.url_schemes.length ? ip.url_schemes.map(escapeHtml).join(", ") : "—"}</dd>
+    <dt>TLS exceptions</dt><dd>${ip.tls_exceptions.length ? ip.tls_exceptions.map((t) => `${escapeHtml(t.domain)} (insecure HTTP: ${yesNo(t.allows_insecure_http)}, min TLS ${escapeHtml(t.minimum_tls_version ?? "default")})`).join("<br>") : "—"}</dd>
+  </dl>`);
+
+  if (audit.asar_integrity) {
+    parts.push(`<h3>ASAR integrity</h3>`);
+    for (const entry of audit.asar_integrity) {
+      parts.push(`<dl>
+        <dt>archive</dt><dd>${escapeHtml(entry.archive_key)}</dd>
+        <dt>declared</dt><dd>${escapeHtml(entry.declared_hash)}</dd>
+        <dt>actual</dt><dd>${escapeHtml(entry.actual_hash ?? "—")}</dd>
+        <dt>matches</dt><dd>${yesNo(entry.matches, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>
+      </dl>`);
+    }
+  }
+  return parts;
+}
+
+function renderWindowsAudit(audit) {
+  const parts = [];
+  const sig = audit.signature;
+  const h = audit.hardening;
+  const m = audit.manifest;
+
+  const trustedDd =
+    sig.trusted == null
+      ? `<dd class="muted">not evaluated</dd>`
+      : `<dd>${yesNo(sig.trusted, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>`;
+  parts.push(`<h3>Authenticode signature</h3>`);
+  parts.push(`<dl>
+    <dt>signed</dt><dd>${yesNo(sig.signed, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>
+    <dt>trusted (OS store)</dt>${trustedDd}
+    <dt>signer</dt><dd>${escapeHtml(sig.subject ?? "—")}</dd>
+    <dt>issuer</dt><dd>${escapeHtml(sig.issuer ?? "—")}</dd>
+    ${sig.note ? `<dt>note</dt><dd class="muted">${escapeHtml(sig.note)}</dd>` : ""}
+  </dl>`);
+
+  parts.push(`<h3>PE hardening</h3>`);
+  parts.push(`<dl>
+    <dt>ASLR (DYNAMICBASE)</dt><dd>${yesNo(h.aslr, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>DEP (NXCOMPAT)</dt><dd>${yesNo(h.dep, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>Control Flow Guard</dt><dd>${yesNo(h.cfg, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>high-entropy ASLR</dt><dd>${yesNo(h.high_entropy_va, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+  </dl>`);
+
+  parts.push(`<h3>Manifest</h3>`);
+  parts.push(`<dl>
+    <dt>requested execution level</dt><dd>${escapeHtml(m.requested_execution_level ?? "—")}</dd>
+  </dl>`);
+
+  parts.push(...renderAsarInfo(audit.asar));
+  return parts;
+}
+
+function renderLinuxAudit(audit) {
+  const parts = [];
+  const h = audit.hardening;
+
+  parts.push(`<h3>ELF hardening</h3>`);
+  parts.push(`<dl>
+    <dt>PIE</dt><dd>${yesNo(h.pie, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>RELRO</dt><dd>${escapeHtml(h.relro)}</dd>
+    <dt>NX stack</dt><dd>${yesNo(h.nx, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>stack canary</dt><dd>${yesNo(h.stack_canary, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+    <dt>FORTIFY_SOURCE</dt><dd>${yesNo(h.fortify_source, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
+  </dl>`);
+
+  if (audit.sandbox) {
+    const s = audit.sandbox;
+    parts.push(`<h3>Sandbox (${escapeHtml(s.kind)})</h3>`);
+    parts.push(`<dl>
+      <dt>permissions</dt><dd>${s.permissions.length ? s.permissions.map((p) => `<code>${escapeHtml(p)}</code>`).join(" ") : "—"}</dd>
+    </dl>`);
+  }
+
+  parts.push(...renderAsarInfo(audit.asar));
+  return parts;
+}
+
+/** Informational ASAR hash block for the non-macOS audits. */
+function renderAsarInfo(asar) {
+  if (!asar) return [];
+  return [
+    `<h3>ASAR</h3>`,
+    `<dl>
+      <dt>archive</dt><dd><code>${escapeHtml(asar.archive_path)}</code></dd>
+      <dt>header sha-256</dt><dd><code>${escapeHtml(asar.header_sha256 ?? "—")}</code></dd>
+    </dl>`,
+  ];
+}
+
 function renderSideEffects(sideeffects) {
   if (!sideeffects) return "";
   if (sideeffects.error) {
@@ -433,9 +581,9 @@ function renderSideEffects(sideeffects) {
       .join("");
     return `<p style="margin:8px 0 4px;color:var(--fg-2)">${escapeHtml(label)}</p><ul style="margin:0 0 8px 0;padding-left:18px">${rows}</ul>`;
   };
-  parts.push(renderHelperList("Contents/Helpers/", sideeffects.helpers));
-  parts.push(renderHelperList("Contents/PlugIns/", sideeffects.plugins));
-  parts.push(renderHelperList("Contents/XPCServices/", sideeffects.xpc_services));
+  parts.push(renderHelperList("Bundled helpers / sibling executables", sideeffects.helpers));
+  parts.push(renderHelperList("Plug-ins", sideeffects.plugins));
+  parts.push(renderHelperList("XPC services", sideeffects.xpc_services));
 
   if (nmh.length > 0) {
     parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">Browser native-messaging bridges (installed silently)</p>`);
@@ -461,15 +609,15 @@ function renderSideEffects(sideeffects) {
   }
 
   if (le.length > 0) {
-    parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">launchd entries</p>`);
+    parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">Auto-start / background entries</p>`);
     for (const e of le) {
       parts.push(`<div class="advisory warn">
-        <strong>${escapeHtml(e.label ?? "(no Label)")}</strong>
+        <strong>${escapeHtml(e.label ?? "(unnamed)")}</strong>
         <span class="muted">[${escapeHtml(e.scope)}]</span>
-        ${e.run_at_load ? ` <span class="bad">RunAtLoad</span>` : ""}
-        ${e.keep_alive ? ` <span class="bad">KeepAlive</span>` : ""}
+        ${e.run_at_load ? ` <span class="bad">runs at login</span>` : ""}
+        ${e.keep_alive ? ` <span class="bad">keep-alive</span>` : ""}
         <br><span class="muted">program:</span> <code>${escapeHtml(e.program)}</code>
-        <br><span class="muted">plist:</span> <code>${escapeHtml(e.plist_path)}</code>
+        <br><span class="muted">source:</span> <code>${escapeHtml(e.plist_path)}</code>
       </div>`);
     }
   }
@@ -540,46 +688,8 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   </dl>`);
 
   if (audit && !audit.error) {
-    const e = audit.entitlements;
-    const ip = audit.info_plist;
-    const cs = audit.code_signature;
-
-    parts.push(`<h3>Code signature</h3>`);
-    parts.push(`<dl>
-      <dt>signed</dt><dd>${yesNo(cs.signed, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>
-      <dt>hardened runtime</dt><dd>${yesNo(cs.hardened_runtime, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
-      <dt>notarized</dt><dd>${yesNo(cs.notarized, { yesClass: "ok", noClass: "warn", yesText: "yes", noText: "no" })}</dd>
-      <dt>team id</dt><dd>${escapeHtml(cs.team_identifier ?? "—")}</dd>
-    </dl>`);
-
-    parts.push(`<h3>Hardened-runtime entitlements</h3>`);
-    parts.push(`<dl>
-      <dt>allow-jit</dt><dd>${yesNo(e.allow_jit, { yesClass: "warn", yesText: "yes", noText: "no" })}</dd>
-      <dt>allow-unsigned-executable-memory</dt><dd>${yesNo(e.allow_unsigned_executable_memory)}</dd>
-      <dt>disable-executable-page-protection</dt><dd>${yesNo(e.disable_executable_page_protection)}</dd>
-      <dt>allow-dyld-environment-variables</dt><dd>${yesNo(e.allow_dyld_environment_variables)}</dd>
-      <dt>disable-library-validation</dt><dd>${yesNo(e.disable_library_validation)}</dd>
-      <dt>get-task-allow (debug)</dt><dd>${yesNo(e.get_task_allow)}</dd>
-    </dl>`);
-
-    parts.push(`<h3>Info.plist hardening</h3>`);
-    parts.push(`<dl>
-      <dt>allows arbitrary loads</dt><dd>${yesNo(ip.allows_arbitrary_loads)}</dd>
-      <dt>url schemes</dt><dd>${ip.url_schemes.length ? ip.url_schemes.map(escapeHtml).join(", ") : "—"}</dd>
-      <dt>TLS exceptions</dt><dd>${ip.tls_exceptions.length ? ip.tls_exceptions.map((t) => `${escapeHtml(t.domain)} (insecure HTTP: ${yesNo(t.allows_insecure_http)}, min TLS ${escapeHtml(t.minimum_tls_version ?? "default")})`).join("<br>") : "—"}</dd>
-    </dl>`);
-
-    if (audit.asar_integrity) {
-      parts.push(`<h3>ASAR integrity</h3>`);
-      for (const entry of audit.asar_integrity) {
-        parts.push(`<dl>
-          <dt>archive</dt><dd>${escapeHtml(entry.archive_key)}</dd>
-          <dt>declared</dt><dd>${escapeHtml(entry.declared_hash)}</dd>
-          <dt>actual</dt><dd>${escapeHtml(entry.actual_hash ?? "—")}</dd>
-          <dt>matches</dt><dd>${yesNo(entry.matches, { yesClass: "ok", noClass: "bad", yesText: "yes", noText: "no" })}</dd>
-        </dl>`);
-      }
-    }
+    // The audit payload is platform-tagged (`platform`: macos | windows | linux).
+    parts.push(...renderAudit(audit));
   } else if (audit?.error) {
     parts.push(`<h3>Audit</h3><p class="bad">${escapeHtml(audit.error)}</p>`);
   }

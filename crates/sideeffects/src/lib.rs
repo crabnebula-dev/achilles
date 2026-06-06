@@ -1,66 +1,66 @@
-//! Detect the system-level side effects a macOS app leaves *outside* its
-//! own bundle. These are the things a purely-in-bundle audit can't see:
+//! Detect the system-level side effects an app leaves *outside* its own
+//! install location — the things a purely-in-place audit can't see.
 //!
-//! - **Inside the bundle** (but easily missed): helpers in `Contents/Helpers/`,
-//!   plugin bundles in `Contents/PlugIns/`, XPC services in
-//!   `Contents/XPCServices/`.
-//! - **Outside the bundle**: native-messaging-host manifests dropped into
-//!   browser profile directories, `launchd` agents / daemons, log
-//!   directories under `~/Library/Logs/`.
+//! Each platform has its own conventions, but they map onto the same shape:
 //!
-//! Each of these can be perfectly legitimate — helper apps for rendering,
-//! browser bridges for integrations, launch agents for background services
-//! — but they're often installed silently by apps without any UI
-//! indication. Surfacing them is a prerequisite for informed user consent.
+//! * **Bundled helpers** — sub-executables shipped alongside the main binary
+//!   (macOS `Contents/Helpers|PlugIns|XPCServices`, Windows sibling `.exe`s,
+//!   Linux sibling binaries).
+//! * **Native-messaging hosts** — browser-bridge manifests the app drops into
+//!   browser profiles (macOS `~/Library/Application Support`, Windows registry,
+//!   Linux `~/.config`).
+//! * **Auto-start / background entries** — launchd agents (macOS), `Run` keys /
+//!   Startup folder / scheduled tasks (Windows), autostart `.desktop` /
+//!   systemd user units (Linux).
+//! * **Log / data directory** — the app's out-of-place state directory.
 //!
-//! # Design
+//! Each can be perfectly legitimate, but apps often install them silently.
+//! Surfacing them is a prerequisite for informed user consent.
 //!
-//! - [`analyse`] is the one-shot entry point. Given an app bundle, it
-//!   returns every side-effect we could identify.
-//! - Cross-app scans (native-messaging hosts, launch agents) are keyed by
-//!   the bundle's `CFBundleIdentifier` and its main executable path, so an
-//!   app that wrote a manifest referencing its own helper can be matched.
-//! - All I/O is blocking; run it inside `tokio::task::spawn_blocking`.
-//!
-//! Macho-only for the moment; paths are macOS-specific.
+//! [`analyse`] is the one-shot entry point. All I/O is blocking; run it inside
+//! `tokio::task::spawn_blocking`.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+mod types;
+pub use types::{BundleHelper, LaunchEntry, LaunchScope, LogDirectory, NativeMessagingHost};
+
+#[cfg(target_os = "macos")]
 mod browsers;
+#[cfg(target_os = "macos")]
 mod bundle_internal;
+#[cfg(target_os = "macos")]
 mod launch;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
 mod logs;
+#[cfg(target_os = "windows")]
+mod windows;
 
-pub use browsers::NativeMessagingHost;
-pub use bundle_internal::BundleHelper;
-pub use launch::LaunchEntry;
-pub use logs::LogDirectory;
-
-/// Every side-effect we detected for one bundle.
+/// Every side-effect we detected for one app.
 #[derive(Debug, Clone, Serialize)]
 pub struct SideEffects {
     pub app_path: PathBuf,
 
-    /// Helper `.app` bundles under `Contents/Helpers/`.
+    /// Helper executables / sub-bundles shipped *inside* the app
+    /// (macOS `Contents/Helpers`, sibling `.exe`s / binaries elsewhere).
     pub helpers: Vec<BundleHelper>,
-    /// Anything under `Contents/PlugIns/` (plugin bundles, loadable
-    /// resources). Electron-style apps put their renderer-helper apps
-    /// here too.
+    /// macOS `Contents/PlugIns` (empty on other platforms).
     pub plugins: Vec<BundleHelper>,
-    /// XPC services bundled under `Contents/XPCServices/`.
+    /// macOS `Contents/XPCServices` (empty on other platforms).
     pub xpc_services: Vec<BundleHelper>,
 
-    /// Native-messaging-host manifests in browser profile dirs whose
-    /// `path` field points back into *this* app's bundle.
+    /// Native-messaging-host manifests, in any browser profile, that point back
+    /// into this app.
     pub native_messaging_hosts: Vec<NativeMessagingHost>,
 
-    /// `launchd` agents / daemons whose `Program` or `ProgramArguments[0]`
-    /// points back into this bundle.
+    /// Auto-start / background-launch registrations referencing this app.
     pub launch_entries: Vec<LaunchEntry>,
 
-    /// `~/Library/Logs/<name>/` directory, if present.
+    /// The app's out-of-place log / data directory, if present.
     pub log_dir: Option<LogDirectory>,
 }
 
@@ -70,29 +70,98 @@ pub enum AnalyseError {
     Io(#[from] std::io::Error),
 }
 
-/// Enumerate every side-effect for the bundle at `app_path`. `bundle_id`
-/// and `executable` are passed explicitly (not re-read) so callers that
-/// already have a `detect::Detection` don't pay for another plist parse.
+/// Enumerate every side-effect for the app at `app_path`. `bundle_id` and
+/// `executable` are passed explicitly (not re-derived) so callers that already
+/// have a `detect::Detection` don't pay for another metadata read.
 pub fn analyse(
     app_path: &Path,
     bundle_id: Option<&str>,
     executable: Option<&Path>,
 ) -> Result<SideEffects, AnalyseError> {
-    let helpers = bundle_internal::enumerate(app_path, "Contents/Helpers");
-    let plugins = bundle_internal::enumerate(app_path, "Contents/PlugIns");
-    let xpc_services = bundle_internal::enumerate(app_path, "Contents/XPCServices");
+    #[cfg(target_os = "macos")]
+    {
+        let helpers = bundle_internal::enumerate(app_path, "Contents/Helpers");
+        let plugins = bundle_internal::enumerate(app_path, "Contents/PlugIns");
+        let xpc_services = bundle_internal::enumerate(app_path, "Contents/XPCServices");
+        let native_messaging_hosts = browsers::scan(app_path);
+        let launch_entries = launch::scan(app_path, executable);
+        let log_dir = logs::find(bundle_id);
 
-    let native_messaging_hosts = browsers::scan(app_path);
-    let launch_entries = launch::scan(app_path, executable);
-    let log_dir = logs::find(bundle_id);
+        Ok(SideEffects {
+            app_path: app_path.to_path_buf(),
+            helpers,
+            plugins,
+            xpc_services,
+            native_messaging_hosts,
+            launch_entries,
+            log_dir,
+        })
+    }
 
-    Ok(SideEffects {
-        app_path: app_path.to_path_buf(),
-        helpers,
-        plugins,
-        xpc_services,
-        native_messaging_hosts,
-        launch_entries,
-        log_dir,
+    #[cfg(target_os = "windows")]
+    {
+        Ok(windows::analyse(app_path, bundle_id, executable))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Ok(linux::analyse(app_path, bundle_id, executable))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (bundle_id, executable);
+        Ok(SideEffects {
+            app_path: app_path.to_path_buf(),
+            helpers: Vec::new(),
+            plugins: Vec::new(),
+            xpc_services: Vec::new(),
+            native_messaging_hosts: Vec::new(),
+            launch_entries: Vec::new(),
+            log_dir: None,
+        })
+    }
+}
+
+/// Shared helper: directory size + file count + newest mtime, used by the
+/// per-OS log/data-directory probes.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn dir_stats(dir: &Path) -> Option<LogDirectory> {
+    use std::time::UNIX_EPOCH;
+
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+    let mut last_modified: Option<u64> = None;
+
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                file_count += 1;
+                total_bytes += meta.len();
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(secs) = modified.duration_since(UNIX_EPOCH) {
+                        let s = secs.as_secs();
+                        last_modified = Some(last_modified.map_or(s, |m| m.max(s)));
+                    }
+                }
+            }
+        }
+    }
+
+    if file_count == 0 {
+        return None;
+    }
+    Some(LogDirectory {
+        path: dir.to_path_buf(),
+        file_count,
+        total_bytes,
+        last_modified,
     })
 }

@@ -4,6 +4,12 @@
 //! We build a minimal directory structure per runtime in a temp dir,
 //! satisfy just enough of each probe's expectations to trigger a positive
 //! verdict, then assert.
+//!
+//! These fixtures emulate the macOS `.app` / `Contents/Frameworks` layout, so
+//! they only exercise the macOS detection path. The Windows / Linux paths
+//! detect via the binary import table and sibling `.dll` / `.so` files; see
+//! `portable.rs` for the cross-platform Electron fixture.
+#![cfg(target_os = "macos")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,9 +108,7 @@ fn nwjs_fixture() {
 fn chromium_browser_fixture() {
     let app = tempdir("chrome").join("Chrome.app");
     write_bundle_plist(&app, "com.google.Chrome", "Google Chrome");
-    let fw = app.join(
-        "Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Resources",
-    );
+    let fw = app.join("Contents/Frameworks/Google Chrome Framework.framework/Versions/A/Resources");
     write_framework_plist(&fw, "147.0.7727.101");
 
     let d = detect(&app).unwrap();

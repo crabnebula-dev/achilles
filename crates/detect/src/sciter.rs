@@ -1,14 +1,13 @@
 //! Sciter probe.
 //!
-//! Sciter can be embedded as either:
+//! Sciter is an embeddable HTML/CSS UI engine shipped as a shared library (or,
+//! on macOS, a framework). Its self-identification string — `Sciter 6.0.0.12`
+//! — is baked into the binary, so the version extracts the same way wherever
+//! the library lives.
 //!
-//! 1. A framework at `Contents/Frameworks/Sciter.framework/` with a version
-//!    in its Info.plist, or
-//! 2. A shared dylib at `Contents/Frameworks/libsciter.dylib` (or similar),
-//!    in which case the version lives as a string inside the binary, e.g.
-//!    `Sciter 6.0.0.12`.
-//!
-//! Both paths populate the same return.
+//! * **macOS**: `Contents/Frameworks/Sciter.framework` or `libsciter*.dylib`.
+//! * **Windows**: `sciter.dll`.
+//! * **Linux**: `libsciter-gtk.so` / `libsciter.so`.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -16,50 +15,57 @@ use std::sync::LazyLock;
 use memmap2::Mmap;
 use regex::bytes::Regex;
 
+use crate::app::Layout;
+
 /// Matches a Sciter self-identification string seen in shipped builds:
 /// `Sciter 6.0.0.12` / `Sciter 5.0.0.7`, etc.
 static SCITER_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Sciter (\d+\.\d+\.\d+(?:\.\d+)?)").unwrap());
 
-pub fn detect(app_path: &Path) -> Result<Option<String>, crate::DetectError> {
-    // Framework flavour — preferred because it's deterministic.
-    let fw = app_path.join("Contents/Frameworks/Sciter.framework");
-    if fw.is_dir() {
-        for rel in &[
-            "Versions/A/Resources/Info.plist",
-            "Resources/Info.plist",
-        ] {
-            let plist = fw.join(rel);
-            if plist.exists() {
-                if let Some(v) = read_plist_version(&plist) {
-                    return Ok(Some(v));
+pub fn detect(layout: &Layout) -> Result<Option<String>, crate::DetectError> {
+    #[cfg(target_os = "macos")]
+    {
+        // Framework flavour — preferred because it's deterministic.
+        let fw = layout.frameworks_dir().join("Sciter.framework");
+        if fw.is_dir() {
+            for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
+                let plist = fw.join(rel);
+                if plist.exists() {
+                    if let Some(v) = read_plist_version(&plist) {
+                        return Ok(Some(v));
+                    }
                 }
             }
+            return Ok(Some("unknown".to_string()));
         }
-        return Ok(Some("unknown".to_string()));
     }
 
-    // Dylib flavour — scan every `libsciter*.dylib` we find under Frameworks.
-    let frameworks = app_path.join("Contents/Frameworks");
-    if let Ok(entries) = std::fs::read_dir(&frameworks) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_s = name.to_string_lossy();
-            if !name_s.starts_with("libsciter") || !name_s.ends_with(".dylib") {
-                continue;
-            }
-            let path = entry.path();
-            match scan_dylib(&path) {
-                Ok(Some(v)) => return Ok(Some(v)),
-                Ok(None) => return Ok(Some("unknown".to_string())),
-                Err(err) => return Err(err),
-            }
+    // Shared-library flavour (every platform): find a sciter library and scan
+    // it for the version string.
+    if let Some(path) = layout.find_file("sciter") {
+        if is_sciter_library(&path) {
+            return match scan_library(&path) {
+                Ok(Some(v)) => Ok(Some(v)),
+                Ok(None) => Ok(Some("unknown".to_string())),
+                Err(err) => Err(err),
+            };
         }
     }
 
     Ok(None)
 }
 
+/// Guard against matching unrelated files that merely contain "sciter" in a
+/// longer name — accept only actual shared-library extensions.
+fn is_sciter_library(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    name.ends_with(".dll") || name.contains(".so") || name.ends_with(".dylib")
+}
+
+#[cfg(target_os = "macos")]
 fn read_plist_version(plist_path: &Path) -> Option<String> {
     let value = plist::Value::from_file(plist_path).ok()?;
     let dict = value.as_dictionary()?;
@@ -69,7 +75,7 @@ fn read_plist_version(plist_path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn scan_dylib(path: &Path) -> Result<Option<String>, crate::DetectError> {
+fn scan_library(path: &Path) -> Result<Option<String>, crate::DetectError> {
     let file = std::fs::File::open(path).map_err(|e| crate::DetectError::Io {
         path: path.to_path_buf(),
         source: e,

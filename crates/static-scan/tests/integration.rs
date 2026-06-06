@@ -1,6 +1,5 @@
 //! Integration tests against synthetic and real fixtures.
 
-
 use static_scan::RuleId;
 
 #[test]

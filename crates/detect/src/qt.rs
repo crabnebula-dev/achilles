@@ -1,94 +1,150 @@
 //! Qt probe.
 //!
-//! A Qt-based macOS app ships one or more `Qt*.framework` bundles under
-//! `Contents/Frameworks/`. `QtCore.framework` is present in every real Qt
-//! app — we use it to pin the Qt runtime version.
+//! * **macOS**: `Qt*.framework` bundles under `Contents/Frameworks/`.
+//!   `QtCore.framework` pins the Qt version (its Info.plist); a
+//!   `QtWebEngineCore.framework` means Qt embeds Chromium, which we
+//!   string-scan for the `Chrome/<version>` UA marker.
+//! * **Windows**: `Qt{5,6}Core.dll` (+ `Qt{5,6}WebEngineCore.dll`).
+//! * **Linux**: `libQt{5,6}Core.so*` (+ `libQt{5,6}WebEngineCore.so*`), bundled
+//!   or imported by the binary.
 //!
-//! If the app also bundles `QtWebEngineCore.framework`, Qt is embedding
-//! Chromium. We string-scan that binary for the same `Chrome/<version>`
-//! user-agent marker Electron emits, so the Chromium version is captured in
-//! `Versions::chromium` alongside the primary Qt verdict.
+//! Off macOS the Qt version is read by string-scanning the Qt core library for
+//! a `Qt x.y.z` marker, falling back to `"unknown"`.
 
-use std::path::Path;
-
+use crate::app::Layout;
 use crate::strings;
-
-const QT_CORE_REL: &str = "Contents/Frameworks/QtCore.framework";
-const QT_WEB_ENGINE_CORE_REL: &str = "Contents/Frameworks/QtWebEngineCore.framework";
 
 pub struct Detection {
     pub qt_version: Option<String>,
     pub chromium_version: Option<String>,
 }
 
-pub fn detect(app_path: &Path) -> Result<Option<Detection>, crate::DetectError> {
-    let qt_core_dir = app_path.join(QT_CORE_REL);
-    if !qt_core_dir.is_dir() {
-        return Ok(None);
+pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::detect(layout)
     }
-
-    let qt_version = read_qt_core_version(&qt_core_dir);
-    let chromium_version = scan_qt_webengine_chromium(app_path)?;
-
-    Ok(Some(Detection {
-        qt_version,
-        chromium_version,
-    }))
+    #[cfg(not(target_os = "macos"))]
+    {
+        portable::detect(layout)
+    }
 }
 
-fn read_qt_core_version(qt_core_dir: &Path) -> Option<String> {
-    for rel in &[
-        "Versions/A/Resources/Info.plist",
-        "Versions/5/Resources/Info.plist",
-        "Versions/6/Resources/Info.plist",
-        "Resources/Info.plist",
-    ] {
-        let plist = qt_core_dir.join(rel);
-        if !plist.exists() {
-            continue;
+#[cfg(not(target_os = "macos"))]
+mod portable {
+    use super::*;
+    use std::sync::LazyLock;
+
+    use regex::bytes::Regex;
+
+    static QT_VERSION_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"Qt (\d+\.\d+\.\d+)").unwrap());
+
+    pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
+        if !(layout.has_library("qt5core") || layout.has_library("qt6core")) {
+            return Ok(None);
         }
-        if let Some(v) = plist_version(&plist) {
-            return Some(v);
-        }
+
+        let qt_version = layout
+            .find_file("qt5core")
+            .or_else(|| layout.find_file("qt6core"))
+            .and_then(|lib| scan_qt_version(&lib));
+
+        // QtWebEngine bundles a Chromium content shell.
+        let chromium_version = layout
+            .find_file("qt5webenginecore")
+            .or_else(|| layout.find_file("qt6webenginecore"))
+            .and_then(|bin| strings::scan_electron_versions(&bin).ok())
+            .and_then(|(chromium, _)| chromium);
+
+        Ok(Some(Detection {
+            qt_version,
+            chromium_version,
+        }))
     }
-    None
+
+    fn scan_qt_version(lib: &std::path::Path) -> Option<String> {
+        let data = std::fs::read(lib).ok()?;
+        QT_VERSION_RE
+            .captures(&data)
+            .and_then(|c| c.get(1))
+            .and_then(|m| std::str::from_utf8(m.as_bytes()).ok())
+            .map(str::to_owned)
+    }
 }
 
-fn scan_qt_webengine_chromium(
-    app_path: &Path,
-) -> Result<Option<String>, crate::DetectError> {
-    let qt_webengine_dir = app_path.join(QT_WEB_ENGINE_CORE_REL);
-    if !qt_webengine_dir.is_dir() {
-        return Ok(None);
-    }
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::path::Path;
 
-    // QtWebEngineCore binary location is similar to QtCore.
-    for rel in &[
-        "Versions/A/QtWebEngineCore",
-        "Versions/5/QtWebEngineCore",
-        "Versions/6/QtWebEngineCore",
-        "QtWebEngineCore",
-    ] {
-        let bin = qt_webengine_dir.join(rel);
-        if bin.exists() {
-            let (chromium, _node) =
-                strings::scan_electron_versions(&bin).map_err(|source| {
-                    crate::DetectError::Io {
-                        path: bin.clone(),
-                        source,
-                    }
-                })?;
-            return Ok(chromium);
+    use super::*;
+
+    pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
+        let frameworks = layout.frameworks_dir();
+        let qt_core_dir = frameworks.join("QtCore.framework");
+        if !qt_core_dir.is_dir() {
+            return Ok(None);
         }
-    }
-    Ok(None)
-}
 
-fn plist_version(plist_path: &Path) -> Option<String> {
-    let value = plist::Value::from_file(plist_path).ok()?;
-    let dict = value.as_dictionary()?;
-    dict.get("CFBundleShortVersionString")
-        .or_else(|| dict.get("CFBundleVersion"))
-        .and_then(|v| v.as_string())
-        .map(str::to_owned)
+        let qt_version = read_qt_core_version(&qt_core_dir);
+        let chromium_version = scan_qt_webengine_chromium(&frameworks)?;
+
+        Ok(Some(Detection {
+            qt_version,
+            chromium_version,
+        }))
+    }
+
+    fn read_qt_core_version(qt_core_dir: &Path) -> Option<String> {
+        for rel in &[
+            "Versions/A/Resources/Info.plist",
+            "Versions/5/Resources/Info.plist",
+            "Versions/6/Resources/Info.plist",
+            "Resources/Info.plist",
+        ] {
+            let plist = qt_core_dir.join(rel);
+            if !plist.exists() {
+                continue;
+            }
+            if let Some(v) = plist_version(&plist) {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    fn scan_qt_webengine_chromium(frameworks: &Path) -> Result<Option<String>, crate::DetectError> {
+        let qt_webengine_dir = frameworks.join("QtWebEngineCore.framework");
+        if !qt_webengine_dir.is_dir() {
+            return Ok(None);
+        }
+        for rel in &[
+            "Versions/A/QtWebEngineCore",
+            "Versions/5/QtWebEngineCore",
+            "Versions/6/QtWebEngineCore",
+            "QtWebEngineCore",
+        ] {
+            let bin = qt_webengine_dir.join(rel);
+            if bin.exists() {
+                let (chromium, _node) =
+                    strings::scan_electron_versions(&bin).map_err(|source| {
+                        crate::DetectError::Io {
+                            path: bin.clone(),
+                            source,
+                        }
+                    })?;
+                return Ok(chromium);
+            }
+        }
+        Ok(None)
+    }
+
+    fn plist_version(plist_path: &Path) -> Option<String> {
+        let value = plist::Value::from_file(plist_path).ok()?;
+        let dict = value.as_dictionary()?;
+        dict.get("CFBundleShortVersionString")
+            .or_else(|| dict.get("CFBundleVersion"))
+            .and_then(|v| v.as_string())
+            .map(str::to_owned)
+    }
 }

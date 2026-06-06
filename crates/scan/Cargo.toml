@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Discover installed .app bundles and run detection, streaming results."
+description = "Discover installed GUI applications and run detection, streaming results."
 
 [dependencies]
 detect.workspace = true
@@ -14,6 +14,10 @@ tokio.workspace = true
 futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+# Resolve Start Menu `.lnk` shortcuts to their target executables.
+[target.'cfg(target_os = "windows")'.dependencies]
+lnk.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

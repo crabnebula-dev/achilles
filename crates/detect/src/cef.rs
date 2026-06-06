@@ -1,41 +1,55 @@
 //! CEF (Chromium Embedded Framework) probe.
 //!
-//! CEF ships its own framework bundle, independent of Electron. An app can
-//! be *both* Tauri and CEF (rare — Tauri normally uses the system WKWebView,
-//! but some apps bundle CEF alongside for features WKWebView can't do).
-//! We therefore run this probe regardless of the primary framework verdict.
+//! CEF ships its own runtime, independent of Electron. An app can be *both*
+//! Tauri and CEF, so this probe runs regardless of the primary verdict.
 //!
-//! CEF's Info.plist exposes the CEF/Chromium version as `CFBundleShortVersionString`,
-//! typically formatted like `130.1.18+g5e85b92+chromium-130.0.6723.117`.
+//! * **macOS**: `Contents/Frameworks/Chromium Embedded Framework.framework`,
+//!   whose Info.plist exposes the version as `CFBundleShortVersionString`
+//!   (e.g. `130.1.18+g5e85b92+chromium-130.0.6723.117`).
+//! * **Windows / Linux**: `libcef.dll` / `libcef.so` beside the executable (or
+//!   imported by it). The Chromium version is string-scanned from that library.
 
-use std::path::Path;
+use crate::app::Layout;
 
-const FRAMEWORK_REL: &str = "Contents/Frameworks/Chromium Embedded Framework.framework";
-
-/// Return the CEF version string if the bundle contains a CEF framework,
-/// else `None`. Looks at both versioned (`Versions/A/...`) and flat
-/// layouts, matching [`crate::electron`]'s probe.
-pub fn detect(app_path: &Path) -> Option<String> {
-    let framework_dir = app_path.join(FRAMEWORK_REL);
-    if !framework_dir.is_dir() {
-        return None;
-    }
-    // Try versioned layout first, then flat.
-    for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
-        let plist_path = framework_dir.join(rel);
-        if !plist_path.exists() {
-            continue;
+/// Return the CEF version string if the app embeds CEF, else `None`.
+pub fn detect(layout: &Layout) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let framework_dir = layout
+            .frameworks_dir()
+            .join("Chromium Embedded Framework.framework");
+        if !framework_dir.is_dir() {
+            return None;
         }
-        if let Some(v) = read_version(&plist_path) {
-            return Some(v);
+        for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
+            let plist_path = framework_dir.join(rel);
+            if !plist_path.exists() {
+                continue;
+            }
+            if let Some(v) = read_plist_version(&plist_path) {
+                return Some(v);
+            }
         }
+        Some("unknown".to_string())
     }
-    // Framework present but no parseable Info.plist — return a placeholder
-    // so callers can still flag the bundle's CEF presence.
-    Some("unknown".to_string())
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !layout.has_library("libcef") {
+            return None;
+        }
+        // Scan the CEF library (or the main exe) for the Chromium UA version.
+        let target = layout
+            .find_file("libcef")
+            .or_else(|| layout.executable.clone());
+        let version = target
+            .and_then(|p| crate::strings::scan_electron_versions(&p).ok())
+            .and_then(|(chromium, _)| chromium);
+        Some(version.unwrap_or_else(|| "unknown".to_string()))
+    }
 }
 
-fn read_version(plist_path: &Path) -> Option<String> {
+#[cfg(target_os = "macos")]
+fn read_plist_version(plist_path: &std::path::Path) -> Option<String> {
     let value = plist::Value::from_file(plist_path).ok()?;
     let dict = value.as_dictionary()?;
     dict.get("CFBundleShortVersionString")

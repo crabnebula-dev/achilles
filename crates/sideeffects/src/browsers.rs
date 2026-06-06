@@ -21,27 +21,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// One native-messaging-host manifest that references the current bundle.
-#[derive(Debug, Clone, Serialize)]
-pub struct NativeMessagingHost {
-    /// Human-readable browser name (`"Chrome"`, `"Brave"`, …).
-    pub browser: String,
-    /// Path of the manifest file itself.
-    pub manifest_path: PathBuf,
-    /// Manifest's declared host name (`name` field, e.g.
-    /// `com.anthropic.claude_browser_extension`).
-    pub host_name: String,
-    /// Path to the native executable the browser will invoke.
-    pub target_path: String,
-    /// `allowed_origins` — usually `chrome-extension://<id>/` URLs.
-    pub allowed_origins: Vec<String>,
-    /// Creation time (seconds since epoch), if the OS provides it.
-    pub created_at: Option<u64>,
-    /// Last-modified time (seconds since epoch).
-    pub modified_at: Option<u64>,
-}
+use crate::types::NativeMessagingHost;
 
 /// Every Chromium-based browser support directory name we know about.
 /// Paths are joined under `~/Library/Application Support/`.

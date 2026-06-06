@@ -37,9 +37,9 @@ async fn main() {
                     v.chromium.as_deref().unwrap_or("-"),
                     v.node.as_deref().unwrap_or("-"),
                     v.tauri.as_deref().unwrap_or("-"),
-                    d.display_name.as_deref().unwrap_or_else(
-                        || d.bundle_id.as_deref().unwrap_or("?")
-                    ),
+                    d.display_name
+                        .as_deref()
+                        .unwrap_or_else(|| d.bundle_id.as_deref().unwrap_or("?")),
                 );
             }
             scan::ScanEvent::Error { path, message } => {

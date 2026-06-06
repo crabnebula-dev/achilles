@@ -6,15 +6,25 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Detect system-level side effects a macOS app leaves outside its bundle: helpers, XPC services, native-messaging hosts, launch agents."
+description = "Detect system-level side effects an app leaves outside its install location: helpers, native-messaging hosts, autostart entries, data dirs."
 
 [dependencies]
-plist.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+# macOS reads launchd plists + bundle Info.plists.
+[target.'cfg(target_os = "macos")'.dependencies]
+plist.workspace = true
+
+# Windows reads the registry (Run keys, native-messaging hosts) and resolves
+# Startup-folder `.lnk` shortcuts.
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg.workspace = true
+lnk.workspace = true
+
 [dev-dependencies]
+detect.workspace = true
 
 [[example]]
 name = "sideeffects"

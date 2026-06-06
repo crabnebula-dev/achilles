@@ -30,10 +30,7 @@ pub enum DependencySource {
 /// Pull dependencies out of byte buffers representing `package-lock.json`
 /// and/or `package.json`. Either may be `None`. Returns a sorted,
 /// deduplicated list.
-pub fn parse(
-    package_lock: Option<&[u8]>,
-    package_json: Option<&[u8]>,
-) -> Vec<Dependency> {
+pub fn parse(package_lock: Option<&[u8]>, package_json: Option<&[u8]>) -> Vec<Dependency> {
     let mut set: BTreeSet<Dependency> = BTreeSet::new();
 
     if let Some(bytes) = package_lock {
@@ -144,8 +141,8 @@ fn clean_pkg_json_range(value: &str) -> String {
         // git/file/npm-alias specs, or wildcard — skip.
         return String::new();
     }
-    let stripped = trimmed
-        .trim_start_matches(|c: char| matches!(c, '^' | '~' | '=' | '>' | '<' | 'v' | ' '));
+    let stripped =
+        trimmed.trim_start_matches(|c: char| matches!(c, '^' | '~' | '=' | '>' | '<' | 'v' | ' '));
     stripped.split_whitespace().next().unwrap_or("").to_owned()
 }
 
@@ -153,7 +150,10 @@ fn derive_name_from_path(path: &str) -> String {
     // The packages-key path is typically `node_modules/foo` or
     // `node_modules/@scope/bar`, possibly repeated (`node_modules/foo/node_modules/…`).
     // Take everything after the *last* `node_modules/` segment.
-    let tail = path.rsplit_once("node_modules/").map(|(_, t)| t).unwrap_or(path);
+    let tail = path
+        .rsplit_once("node_modules/")
+        .map(|(_, t)| t)
+        .unwrap_or(path);
     tail.to_owned()
 }
 
@@ -174,7 +174,9 @@ mod tests {
         }"#;
         let deps = parse(Some(lock), None);
         assert!(deps.iter().any(|d| d.name == "foo" && d.version == "1.2.3"));
-        assert!(deps.iter().any(|d| d.name == "@scope/bar" && d.version == "4.5.6"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "@scope/bar" && d.version == "4.5.6"));
         assert!(!deps.iter().any(|d| d.name == "app"));
     }
 
@@ -204,8 +206,12 @@ mod tests {
             "devDependencies": { "typescript": "~5.2.0" }
         }"#;
         let deps = parse(None, Some(pj));
-        assert!(deps.iter().any(|d| d.name == "lodash" && d.version == "4.17.21"));
-        assert!(deps.iter().any(|d| d.name == "typescript" && d.version == "5.2.0"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "lodash" && d.version == "4.17.21"));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "typescript" && d.version == "5.2.0"));
         // git dep should have been skipped
         assert!(!deps.iter().any(|d| d.name == "git-dep"));
     }
