@@ -64,6 +64,91 @@ impl DiscoveredApp {
     }
 }
 
+/// Windows Squirrel installs (GitKraken, older Slack/Discord, …) drop a small
+/// launcher *stub* at the install root next to `Update.exe`, while the real
+/// application lives in versioned `app-<version>` subdirectories. The Start Menu
+/// shortcut targets the stub, so discovery hands us a root with no runtime
+/// markers and the app gets misclassified as `Native`.
+///
+/// If `app` looks like such a stub, return a copy whose `root` + `executable`
+/// point at the newest `app-<version>` dir so framework probes see the real
+/// binary and its `resources/`. `path` (the stable identity the UI keys on) is
+/// preserved, so it survives version bumps. Returns `None` when this isn't a
+/// Squirrel layout, leaving the app untouched.
+#[cfg(target_os = "windows")]
+pub(crate) fn redirect_squirrel_stub(app: &DiscoveredApp) -> Option<DiscoveredApp> {
+    // A genuine Squirrel root has `Update.exe` sitting beside the stub.
+    if !app.root.join("Update.exe").is_file() {
+        return None;
+    }
+    let versioned = newest_squirrel_app_dir(&app.root)?;
+
+    // Map the stub to its namesake inside the versioned dir (GitKraken's stub
+    // and real binary are both `gitkraken.exe`); fall back to the first plain
+    // executable there so detection still has a binary to scan.
+    let executable = app
+        .executable
+        .as_ref()
+        .and_then(|e| e.file_name())
+        .map(|n| versioned.join(n))
+        .filter(|p| p.is_file())
+        .or_else(|| first_versioned_exe(&versioned));
+
+    Some(DiscoveredApp {
+        path: app.path.clone(),
+        root: versioned,
+        executable,
+        name: app.name.clone(),
+    })
+}
+
+/// Newest `app-<version>` subdirectory of a Squirrel install root, compared by
+/// dotted numeric version (so `app-12.10.0` beats `app-12.2.0`).
+#[cfg(target_os = "windows")]
+fn newest_squirrel_app_dir(root: &Path) -> Option<PathBuf> {
+    let mut best: Option<(Vec<u64>, PathBuf)> = None;
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(version) = name
+            .to_string_lossy()
+            .strip_prefix("app-")
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let key: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+        if best.as_ref().map(|(b, _)| key > *b).unwrap_or(true) {
+            best = Some((key, path));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// First non-helper `.exe` directly inside a Squirrel versioned dir, skipping
+/// the bundled `squirrel.exe` / `Update.exe` maintenance binaries.
+#[cfg(target_os = "windows")]
+fn first_versioned_exe(dir: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e.eq_ignore_ascii_case("exe")) != Some(true) {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if stem == "squirrel" || stem == "update" {
+            continue;
+        }
+        return Some(path);
+    }
+    None
+}
+
 /// Resolved on-disk layout for a discovered app. Probes consult this rather
 /// than joining platform paths themselves.
 pub(crate) struct Layout {

@@ -194,6 +194,15 @@ pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
         return Err(DetectError::NotFound(app.path.clone()));
     }
 
+    // A Windows Squirrel launcher stub points discovery at the install root,
+    // which has no runtime markers; redirect to the real versioned app dir so
+    // probes (and downstream audits, via `Detection.root`/`executable`) see it.
+    // `app.path` is preserved as the stable identity.
+    #[cfg(target_os = "windows")]
+    let redirected = app::redirect_squirrel_stub(app);
+    #[cfg(target_os = "windows")]
+    let app = redirected.as_ref().unwrap_or(app);
+
     let bundle = metadata::read(app);
     // Effective executable: discovery's, falling back to the one declared in
     // platform metadata (macOS `CFBundleExecutable`). Must be a regular file —
