@@ -134,22 +134,7 @@ pub async fn lookup_cpe_with_key(
     }
 
     let cpe_name = format!("cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*");
-    let mut req = http
-        .get(NVD_URL)
-        .query(&[("cpeName", cpe_name.as_str())])
-        .timeout(Duration::from_secs(30));
-    if let Some(key) = api_key {
-        req = req.header("apiKey", key);
-    }
-    let res = req.send().await?;
-    let status = res.status();
-    let text = res.text().await?;
-    if !status.is_success() {
-        return Err(Error::BadPayload(format!(
-            "nvd {cpe_name} {status}: {}",
-            truncate(&text, 200)
-        )));
-    }
+    let text = fetch_with_retry(http, &cpe_name, api_key).await?;
     let parsed: NvdResponse = serde_json::from_str(&text)
         .map_err(|e| Error::BadPayload(format!("nvd {cpe_name}: {e}")))?;
 
@@ -165,6 +150,72 @@ pub async fn lookup_cpe_with_key(
 
     cache::put(&cache_key, &advisories);
     Ok(advisories)
+}
+
+/// Maximum number of attempts (one initial try + retries) for a single NVD
+/// request.
+const MAX_ATTEMPTS: u32 = 4;
+
+/// GET the NVD endpoint for `cpe_name`, retrying transient failures.
+///
+/// NVD throttles aggressively when unauthenticated (5 req/30s) and tends to
+/// surface that as a dropped connection or timeout ("error sending request")
+/// rather than a clean 429 — so a single blip would otherwise blank out a
+/// whole runtime's advisories. We retry transport errors and throttle/server
+/// statuses with exponential backoff; everything else fails fast.
+async fn fetch_with_retry(
+    http: &Client,
+    cpe_name: &str,
+    api_key: Option<&str>,
+) -> Result<String, Error> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let mut req = http
+            .get(NVD_URL)
+            .query(&[("cpeName", cpe_name)])
+            .timeout(Duration::from_secs(30));
+        if let Some(key) = api_key {
+            req = req.header("apiKey", key);
+        }
+
+        match req.send().await {
+            Ok(res) => {
+                let status = res.status();
+                let text = res.text().await?;
+                if status.is_success() {
+                    return Ok(text);
+                }
+                // 429 (rate limited) and 5xx are worth another go; other
+                // statuses (404, 400, …) won't change on retry.
+                let retryable = status.as_u16() == 429 || status.is_server_error();
+                if retryable && attempt < MAX_ATTEMPTS {
+                    backoff(attempt).await;
+                    continue;
+                }
+                return Err(Error::BadPayload(format!(
+                    "nvd {cpe_name} {status}: {}",
+                    truncate(&text, 200)
+                )));
+            }
+            Err(e) => {
+                // Transport-level failure: timeout, connection reset, refused.
+                let transient = e.is_timeout() || e.is_connect() || e.is_request();
+                if transient && attempt < MAX_ATTEMPTS {
+                    backoff(attempt).await;
+                    continue;
+                }
+                return Err(Error::Http(e));
+            }
+        }
+    }
+}
+
+/// Exponential backoff sized to NVD's 30-second window: ~2s, 4s, 8s. Capped so
+/// a stuck runtime can't stall a scan indefinitely.
+async fn backoff(attempt: u32) {
+    let secs = (1u64 << attempt).min(8); // attempt 1→2s, 2→4s, 3→8s
+    tokio::time::sleep(Duration::from_secs(secs)).await;
 }
 
 /// Returns `Some(advisory)` only when `version` genuinely falls inside the

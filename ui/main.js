@@ -1130,6 +1130,10 @@ document.querySelector("#export-detail").addEventListener("click", exportDetail)
 
 rescanBtn.addEventListener("click", () => {
   rows.clear();
+  // Drop the per-session detail cache too — otherwise a previously-opened app
+  // keeps showing its pre-rescan audit/CVE payload (e.g. an old runtime
+  // version and the CVEs that went with it) after the app has been updated.
+  detailCache.clear();
   tbody.replaceChildren();
   detailPanel.hidden = true;
   startScan();
