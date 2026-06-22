@@ -8,6 +8,7 @@
 //! | Tauri                 | OSV, ecosystem `crates.io`             |
 //! | Node.js core          | NVD, `cpe:2.3:a:nodejs:node.js:*`      |
 //! | Chromium              | NVD, `cpe:2.3:a:google:chrome:*`       |
+//! | CEF (embedded Chrome) | NVD, `cpe:2.3:a:google:chrome:*`       |
 //! | Bundled npm deps      | OSV `v1/querybatch`, ecosystem `npm`   |
 //!
 //! All lookups are memoised on disk via [`crate::cache`] with a 24-hour TTL.
@@ -35,6 +36,25 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("unexpected payload: {0}")]
     BadPayload(String),
+    /// An upstream source was transiently unavailable (5xx / rate-limited)
+    /// even after retries. Not actionable to the user, so it's kept out of the
+    /// report's user-facing `errors` — see [`Error::is_transient`].
+    #[error("temporarily unavailable: {0}")]
+    Unavailable(String),
+}
+
+impl Error {
+    /// True for upstream-availability failures that aren't actionable to the
+    /// user: transient server errors, rate limits, and network blips. These are
+    /// already retried, so when they still fail we drop them from the report's
+    /// user-facing `errors` rather than surfacing raw 503 noise.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Error::Unavailable(_) => true,
+            Error::Http(e) => e.is_timeout() || e.is_connect() || e.is_request(),
+            Error::BadPayload(_) => false,
+        }
+    }
 }
 
 /// Grouped advisories for a single app's detected runtimes.
@@ -60,9 +80,22 @@ pub struct CveReport {
     /// every WKWebView-backed app (Tauri, Wails) whose scan picked up the
     /// system Safari version.
     pub webkit: Vec<Advisory>,
+    /// Chromium Embedded Framework advisories. CEF embeds Chromium, so these
+    /// are Chromium CVEs (`cpe:2.3:a:google:chrome:*`) looked up by the
+    /// embedded Chromium version — populated independently of [`Framework`], so
+    /// an app that is *both* Tauri and CEF gets both buckets.
+    pub cef: Vec<Advisory>,
     /// Per-source error messages encountered during this report. A single
     /// source failing never aborts the whole report — it just shows up here.
+    /// Transient upstream-availability failures (5xx / rate limits) are kept
+    /// out of here — see [`CveReport::unavailable`].
     pub errors: Vec<String>,
+    /// Names of sources (e.g. `"NVD"`) that were transiently unavailable this
+    /// run, deduplicated. These aren't hard errors worth the raw-payload noise,
+    /// but the UI must still distinguish "looked up, found nothing" from
+    /// "couldn't look up" — otherwise a rate-limited NVD looks like a clean
+    /// bill of health for runtimes only it covers (e.g. Chromium).
+    pub unavailable: Vec<String>,
 }
 
 /// Which [`CveReport`] field a concurrent lookup feeds into.
@@ -80,6 +113,7 @@ enum Bucket {
     Sciter,
     Java,
     Webkit,
+    Cef,
 }
 
 impl CveReport {
@@ -97,6 +131,7 @@ impl CveReport {
             Bucket::Sciter => &mut self.sciter,
             Bucket::Java => &mut self.java,
             Bucket::Webkit => &mut self.webkit,
+            Bucket::Cef => &mut self.cef,
         }
     }
 }
@@ -155,25 +190,49 @@ impl Client_ {
     /// `errors` and the report still returns. Sources disabled in settings
     /// are skipped silently.
     pub async fn report_for(&self, versions: &Versions) -> CveReport {
-        use futures::future::{join_all, BoxFuture};
+        self.report_for_streaming(versions, |_| {}).await
+    }
+
+    /// Like [`report_for`], but invokes `emit` with a progressively-complete
+    /// snapshot of the report each time a source finishes — so the UI can
+    /// paint EUVD/OSV results without waiting on a slow source (e.g. NVD
+    /// retrying 503s). Each snapshot is filtered exactly like the final report,
+    /// so callers can render it directly and simply replace the previous one.
+    /// The returned value is the final, fully-populated report.
+    pub async fn report_for_streaming<F>(
+        &self,
+        versions: &Versions,
+        mut emit: F,
+    ) -> CveReport
+    where
+        F: FnMut(CveReport),
+    {
+        use futures::future::BoxFuture;
+        use futures::stream::{FuturesUnordered, StreamExt};
 
         let mut report = CveReport::default();
         let s = &self.settings.sources;
         let http = &self.http;
+        // Embedded Chromium build a CEF app should be matched against. Hoisted
+        // to the function scope so the lookup futures can borrow it for the
+        // lifetime of the concurrent run, like the other version references.
+        let cef_chromium = versions.cef.as_deref().and_then(cef_chromium_version);
 
         // One lookup future per (runtime, source). They're independent network
         // calls, so we run them all concurrently rather than awaiting each in
         // turn — a multi-runtime Electron app would otherwise pay for a dozen
-        // serialised round-trips (with NVD rate-limited on top). `join_all`
-        // preserves order, so advisories land in each bucket as before.
+        // serialised round-trips (with NVD rate-limited on top). We drain them
+        // in completion order (not submission order) so fast sources surface
+        // their results to `emit` immediately.
         #[allow(clippy::type_complexity)]
-        let mut tasks: Vec<BoxFuture<'_, (Bucket, String, Result<Vec<Advisory>, Error>)>> =
-            Vec::new();
+        let mut tasks: Vec<
+            BoxFuture<'_, (Bucket, &'static str, String, Result<Vec<Advisory>, Error>)>,
+        > = Vec::new();
 
         macro_rules! task {
             ($bucket:expr, $src:literal, $name:literal, $v:expr, $fut:expr) => {{
                 let prefix = format!("[{}] {} {}", $src, $name, $v);
-                tasks.push(Box::pin(async move { ($bucket, prefix, $fut.await) }));
+                tasks.push(Box::pin(async move { ($bucket, $src, prefix, $fut.await) }));
             }};
         }
 
@@ -287,6 +346,36 @@ impl Client_ {
                     "chromium",
                     v,
                     sources::euvd::lookup(http, "Google", "Chrome", v)
+                );
+            }
+        }
+
+        // CEF embeds Chromium; its CVEs are Chromium's. The CEF version string
+        // carries the embedded Chromium build (e.g. `…+chromium-130.0.6723.117`),
+        // so we look that up against `google:chrome` just like a Chromium runtime.
+        if let Some(chromium) = &cef_chromium {
+            if s.nvd.enabled {
+                task!(
+                    Bucket::Cef,
+                    "nvd",
+                    "cef",
+                    chromium,
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "google",
+                        "chrome",
+                        chromium,
+                        s.nvd.api_key.as_deref()
+                    )
+                );
+            }
+            if s.euvd.enabled {
+                task!(
+                    Bucket::Cef,
+                    "euvd",
+                    "cef",
+                    chromium,
+                    sources::euvd::lookup(http, "Google", "Chrome", chromium)
                 );
             }
         }
@@ -515,16 +604,40 @@ impl Client_ {
             }
         }
 
-        for (bucket, prefix, result) in join_all(tasks).await {
+        let max_age = self.settings.filters.max_age_years;
+        let finalize = |raw: &CveReport| {
+            let mut snapshot = raw.clone();
+            apply_relevance_filter(&mut snapshot, versions);
+            apply_age_filter(&mut snapshot, max_age);
+            snapshot
+        };
+
+        // Sources that hit a transient failure this run, deduped and kept in a
+        // stable order. We surface the source *name* (not the raw 503 payload)
+        // so the UI can flag incomplete results without the noise.
+        let mut unavailable: std::collections::BTreeSet<&'static str> =
+            std::collections::BTreeSet::new();
+
+        let mut pending: FuturesUnordered<_> = tasks.into_iter().collect();
+        while let Some((bucket, src, prefix, result)) = pending.next().await {
             match result {
                 Ok(advisories) => report.bucket_mut(bucket).extend(advisories),
+                // Transient upstream failures (NVD 503s, rate limits, network
+                // blips) aren't actionable and their raw bodies are noise — but
+                // we still record the source name so a rate-limited NVD doesn't
+                // masquerade as "no advisories" for Chromium-only runtimes.
+                Err(err) if err.is_transient() => {
+                    unavailable.insert(src);
+                }
                 Err(err) => report.errors.push(format!("{prefix}: {err}")),
             }
+            report.unavailable = unavailable.iter().map(|s| s.to_uppercase()).collect();
+            // Emit a filtered snapshot after every completion so the UI streams
+            // results in as each source lands rather than all at once.
+            emit(finalize(&report));
         }
 
-        apply_relevance_filter(&mut report, versions);
-        apply_age_filter(&mut report, self.settings.filters.max_age_years);
-        report
+        finalize(&report)
     }
 
     /// Run a raw OSV query (handy for the example CLI / tests).
@@ -591,6 +704,31 @@ fn apply_relevance_filter(report: &mut CveReport, versions: &Versions) {
     filter(&mut report.sciter, versions.sciter.as_ref(), None);
     filter(&mut report.java, versions.java.as_ref(), None);
     filter(&mut report.webkit, versions.webkit.as_ref(), Some("Safari"));
+    // CEF advisories are Chromium CVEs — filter against the embedded Chromium
+    // build, not the raw CEF version string.
+    let cef_chromium = versions.cef.as_deref().and_then(cef_chromium_version);
+    filter(&mut report.cef, cef_chromium.as_ref(), None);
+}
+
+/// Extract the embedded Chromium version from a CEF version string.
+///
+/// macOS CEF versions look like `130.1.18+g5e85b92+chromium-130.0.6723.117`
+/// (the trailing `chromium-…` is the embedded Chromium build); the Windows /
+/// Linux probe already yields a bare Chromium version. Returns `None` for
+/// `"unknown"` or anything without a usable dotted-numeric version.
+fn cef_chromium_version(cef: &str) -> Option<String> {
+    let candidate = match cef.split_once("chromium-") {
+        Some((_, rest)) => rest
+            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .next()
+            .unwrap_or(""),
+        None => cef.trim(),
+    };
+    let numeric = candidate.split('.').count() >= 2
+        && candidate
+            .split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    numeric.then(|| candidate.to_string())
 }
 
 /// Decide whether a single advisory applies to `scanned` version on `os`.
@@ -647,6 +785,7 @@ fn apply_age_filter(report: &mut CveReport, max_age_years: Option<u32>) {
     filter(&mut report.sciter);
     filter(&mut report.java);
     filter(&mut report.webkit);
+    filter(&mut report.cef);
 }
 
 /// Same filter applied to npm-dep advisory lists from [`Client_::batch_npm`].
@@ -694,6 +833,23 @@ fn current_year() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cef_chromium_version_extracts_embedded_build() {
+        // macOS: full CEF version with the embedded Chromium build suffix.
+        assert_eq!(
+            cef_chromium_version("130.1.18+g5e85b92+chromium-130.0.6723.117"),
+            Some("130.0.6723.117".into())
+        );
+        // Windows / Linux: probe already yields a bare Chromium version.
+        assert_eq!(
+            cef_chromium_version("130.0.6723.117"),
+            Some("130.0.6723.117".into())
+        );
+        // Unknown / unusable strings produce no lookup version.
+        assert_eq!(cef_chromium_version("unknown"), None);
+        assert_eq!(cef_chromium_version(""), None);
+    }
 
     fn adv(year: Option<&str>) -> Advisory {
         Advisory {

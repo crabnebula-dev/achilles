@@ -143,10 +143,25 @@ pub async fn static_scan(root: PathBuf) -> Result<static_scan::Report, String> {
 /// Uses whichever sources are enabled in [`cve::Settings`]; disabled sources
 /// are skipped silently. A client is constructed per call so the newest
 /// saved settings take effect immediately.
+///
+/// `on_update` receives a progressively-complete report each time a source
+/// finishes, so the UI can paint fast sources (EUVD / OSV) without waiting on a
+/// slow one (e.g. NVD retrying 503s). The resolved value is the final report.
 #[tauri::command]
-pub async fn cve_lookup(versions: CveLookupArgs) -> Result<cve::CveReport, String> {
+pub async fn cve_lookup(
+    versions: CveLookupArgs,
+    on_update: tauri::ipc::Channel<cve::CveReport>,
+) -> Result<cve::CveReport, String> {
     let client = cve::OsvClient::new();
-    Ok(client.report_for(&versions.into()).await)
+    let report = client
+        .report_for_streaming(&versions.into(), |snapshot| {
+            // A failed send just means the frontend dropped the channel (e.g.
+            // the user clicked another app); the final return value still
+            // carries the complete report.
+            let _ = on_update.send(snapshot);
+        })
+        .await;
+    Ok(report)
 }
 
 /// Return the currently persisted settings (or [`cve::Settings::default`]

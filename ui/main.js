@@ -6,7 +6,7 @@
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
 1
-const { invoke } = window.__TAURI__.core;
+const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { save } = window.__TAURI__.dialog;
 const { writeTextFile } = window.__TAURI__.fs;
@@ -363,9 +363,6 @@ async function openDetail(det) {
       root: det.root,
       executable: det.executable ?? null,
     }).catch((e) => ({ error: String(e) }));
-    const cvesP = invoke("cve_lookup", { versions: det.versions }).catch((e) => ({
-      error: String(e),
-    }));
     const staticP =
       det.framework === "electron"
         ? invoke("static_scan", { root: det.root }).catch((e) => ({ error: String(e) }))
@@ -420,6 +417,19 @@ async function openDetail(det) {
       cache.sideeffects = sideeffects;
       repaint();
     });
+    // CVE lookups stream in per source over a Channel: each message is a
+    // progressively-complete report, so fast sources (EUVD / OSV) paint without
+    // waiting on a slow one (e.g. NVD retrying 503s). The resolved promise
+    // carries the final, fully-populated report.
+    const cveChannel = new Channel();
+    cveChannel.onmessage = (snapshot) => {
+      cache.cves = snapshot;
+      repaint();
+    };
+    const cvesP = invoke("cve_lookup", {
+      versions: det.versions,
+      onUpdate: cveChannel,
+    }).catch((e) => ({ error: String(e) }));
     cvesP.then((cves) => {
       cache.cves = cves;
       repaint();
@@ -562,6 +572,7 @@ function runtimeCvesContent(cves) {
   const sources = [
     { key: "electron", label: "Electron" },
     { key: "chromium", label: "Chromium" },
+    { key: "cef", label: "CEF (Chromium)" },
     { key: "node", label: "Node.js" },
     { key: "tauri", label: "Tauri" },
     { key: "flutter", label: "Flutter" },
@@ -585,11 +596,30 @@ function runtimeCvesContent(cves) {
     for (const a of list) parts.push(renderAdvisory(a));
   }
 
-  if (count === 0) {
+  const hasErrors = (cves.errors ?? []).length > 0;
+  const unavailable = cves.unavailable ?? [];
+
+  // Only claim "all clear" when every source actually answered. If a lookup
+  // failed (NVD 503) or a source was unavailable, count === 0 means "we don't
+  // know", not "nothing matched" — the notices below explain it instead.
+  if (count === 0 && !hasErrors && unavailable.length === 0) {
     parts.push(`<p class="ok">No advisories matched for any detected runtime.</p>`);
   }
 
-  if ((cves.errors ?? []).length) {
+  // Transient unavailability (e.g. NVD rate-limiting) is shown as a concise
+  // notice rather than raw error payloads: Chromium advisories come almost
+  // entirely from NVD, so a silent failure would read as a clean bill of health.
+  if (unavailable.length > 0) {
+    // NVD throttles unauthenticated callers hard (5 req/30s); an API key raises
+    // it to 50 and is the practical fix when Chromium/Node advisories vanish.
+    const nvdHint =
+      unavailable.includes("NVD") && !nvdApiKeyConfigured
+        ? " Add an NVD API key in Settings to raise the rate limit (5→50 per 30s)."
+        : "";
+    parts.push(`<p class="warn" style="margin-top:8px">${escapeHtml(unavailable.join(", "))} temporarily unavailable — results may be incomplete.${nvdHint}</p>`);
+  }
+
+  if (hasErrors) {
     parts.push(`<p class="warn" style="margin-top:8px">Source errors: ${escapeHtml(cves.errors.join("; "))}</p>`);
   }
   return { count, html: parts.join("") };
@@ -1188,6 +1218,19 @@ function applySettingsToForm(s) {
     age == null ? "0" : String(age);
 }
 
+// Whether an NVD API key is configured. Cached so the runtime-CVE pane can
+// suggest adding one when NVD is rate-limited (without re-fetching settings on
+// every repaint). Refreshed at boot and after the settings form is saved.
+let nvdApiKeyConfigured = false;
+async function refreshNvdKeyState() {
+  try {
+    const s = await invoke("get_settings");
+    nvdApiKeyConfigured = Boolean(s?.sources?.nvd?.api_key);
+  } catch {
+    // Leave the previous value on failure — a missing hint is harmless.
+  }
+}
+
 async function openSettings() {
   try {
     const [settings, path] = await Promise.all([
@@ -1226,6 +1269,7 @@ settingsForm.addEventListener("submit", async (e) => {
   const settings = formToSettings();
   try {
     await invoke("set_settings", { settings });
+    nvdApiKeyConfigured = Boolean(settings?.sources?.nvd?.api_key);
     closeSettings();
     setStatus("settings saved");
   } catch (err) {
@@ -1386,3 +1430,4 @@ updateDismissBtn.addEventListener("click", () => {
 buildHeader();
 startScan();
 void checkForUpdates();
+void refreshNvdKeyState();

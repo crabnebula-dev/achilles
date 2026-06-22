@@ -101,12 +101,12 @@ pub async fn lookup(
     let status = res.status();
     let text = res.text().await?;
     if !status.is_success() {
-        return Err(Error::BadPayload(format!(
-            "osv {} {}: {}",
-            ecosystem,
+        return Err(crate::sources::http_error(
+            format!("osv {ecosystem}"),
             status,
-            truncate(&text, 180)
-        )));
+            &text,
+            180,
+        ));
     }
     let parsed: QueryResponse = serde_json::from_str(&text)
         .map_err(|e| Error::BadPayload(format!("osv {ecosystem}: {e}")))?;
@@ -164,10 +164,7 @@ pub async fn batch_npm(
         let status = res.status();
         let text = res.text().await?;
         if !status.is_success() {
-            return Err(Error::BadPayload(format!(
-                "osv batch {status}: {}",
-                truncate(&text, 180)
-            )));
+            return Err(crate::sources::http_error("osv batch", status, &text, 180));
         }
         let batch: BatchResponse = serde_json::from_str(&text)
             .map_err(|e| Error::BadPayload(format!("osv batch: {e}")))?;
@@ -202,10 +199,12 @@ async fn hydrate(http: &Client, id: &str) -> Result<Advisory, Error> {
     let status = res.status();
     let text = res.text().await?;
     if !status.is_success() {
-        return Err(Error::BadPayload(format!(
-            "osv hydrate {id} {status}: {}",
-            truncate(&text, 180)
-        )));
+        return Err(crate::sources::http_error(
+            format!("osv hydrate {id}"),
+            status,
+            &text,
+            180,
+        ));
     }
     let vuln: Vulnerability = serde_json::from_str(&text)
         .map_err(|e| Error::BadPayload(format!("osv hydrate {id}: {e}")))?;
@@ -239,12 +238,4 @@ fn to_advisory(v: Vulnerability) -> Advisory {
 
 fn cache_key_for(dep: &NpmPackage) -> String {
     format!("osv-npm-{}-{}", dep.name.replace('/', "_"), dep.version)
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        s.to_owned()
-    } else {
-        format!("{}…", &s[..n])
-    }
 }

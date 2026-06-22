@@ -118,90 +118,91 @@ mod macos {
         None
     }
 
-/// Chrome-family frameworks keep one directory per installed version under
-/// `Versions/` (named by the version, e.g. `148.0.7778.216`), with a `Current`
-/// symlink pointing at the active one. After an update the *previous* version's
-/// directory lingers on disk, so we must not just grab the first entry — that
-/// risks reporting a stale leftover.
-///
-/// Order of preference:
-///   1. `Versions/Current` — the version Chrome will actually launch.
-///   2. the framework's top-level `Resources` (usually another route to
-///      `Current`).
-///   3. the highest version directory present — covers a broken or missing
-///      `Current` symlink without ever falling back to an older leftover.
-fn read_chromium_version(framework_dir: &Path) -> Option<String> {
-    let versions_dir = framework_dir.join("Versions");
+    /// Chrome-family frameworks keep one directory per installed version under
+    /// `Versions/` (named by the version, e.g. `148.0.7778.216`), with a `Current`
+    /// symlink pointing at the active one. After an update the *previous* version's
+    /// directory lingers on disk, so we must not just grab the first entry — that
+    /// risks reporting a stale leftover.
+    ///
+    /// Order of preference:
+    ///   1. `Versions/Current` — the version Chrome will actually launch.
+    ///   2. the framework's top-level `Resources` (usually another route to
+    ///      `Current`).
+    ///   3. the highest version directory present — covers a broken or missing
+    ///      `Current` symlink without ever falling back to an older leftover.
+    fn read_chromium_version(framework_dir: &Path) -> Option<String> {
+        let versions_dir = framework_dir.join("Versions");
 
-    if let Some(v) = read_plist_version(&versions_dir.join("Current/Resources/Info.plist")) {
-        return Some(v);
-    }
-    if let Some(v) = read_plist_version(&framework_dir.join("Resources/Info.plist")) {
-        return Some(v);
-    }
-
-    // Last resort: enumerate version directories and take the highest. The
-    // directory name *is* the version; we still read its Info.plist when
-    // possible, falling back to the directory name itself.
-    let mut best: Option<String> = None;
-    for entry in std::fs::read_dir(&versions_dir).ok()?.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // Skip `Current` and anything that isn't a version directory.
-        if !name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            continue;
+        if let Some(v) = read_plist_version(&versions_dir.join("Current/Resources/Info.plist")) {
+            return Some(v);
         }
-        let version = read_plist_version(&entry.path().join("Resources/Info.plist"))
-            .unwrap_or_else(|| name.into_owned());
-        if best.as_deref().map_or(true, |b| cmp_version(&version, b).is_gt()) {
-            best = Some(version);
+        if let Some(v) = read_plist_version(&framework_dir.join("Resources/Info.plist")) {
+            return Some(v);
         }
+
+        // Last resort: enumerate version directories and take the highest. The
+        // directory name *is* the version; we still read its Info.plist when
+        // possible, falling back to the directory name itself.
+        let mut best: Option<String> = None;
+        for entry in std::fs::read_dir(&versions_dir).ok()?.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Skip `Current` and anything that isn't a version directory.
+            if !name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let version = read_plist_version(&entry.path().join("Resources/Info.plist"))
+                .unwrap_or_else(|| name.into_owned());
+            if best.as_deref().map_or(true, |b| cmp_version(&version, b).is_gt()) {
+                best = Some(version);
+            }
+        }
+        best
     }
-    best
-}
 
-/// Read `CFBundleShortVersionString` (falling back to `CFBundleVersion`) from a
-/// plist, or `None` if the file is missing/unreadable.
-fn read_plist_version(plist_path: &Path) -> Option<String> {
-    let value = plist::Value::from_file(plist_path).ok()?;
-    let dict = value.as_dictionary()?;
-    dict.get("CFBundleShortVersionString")
-        .or_else(|| dict.get("CFBundleVersion"))
-        .and_then(|v| v.as_string())
-        .map(str::to_owned)
-}
+    /// Read `CFBundleShortVersionString` (falling back to `CFBundleVersion`) from a
+    /// plist, or `None` if the file is missing/unreadable.
+    fn read_plist_version(plist_path: &Path) -> Option<String> {
+        let value = plist::Value::from_file(plist_path).ok()?;
+        let dict = value.as_dictionary()?;
+        dict.get("CFBundleShortVersionString")
+            .or_else(|| dict.get("CFBundleVersion"))
+            .and_then(|v| v.as_string())
+            .map(str::to_owned)
+    }
 
-/// Compare dotted-numeric version strings component-by-component as integers
-/// (`148.0.7778.216` vs `148.0.7778.179`). Used only to pick the newest
-/// version directory, so non-numeric components simply count as 0.
-fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering::Equal;
-    let mut ai = a.split('.');
-    let mut bi = b.split('.');
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Equal,
-            (x, y) => {
-                let xv: u64 = x.unwrap_or("0").parse().unwrap_or(0);
-                let yv: u64 = y.unwrap_or("0").parse().unwrap_or(0);
-                match xv.cmp(&yv) {
-                    Equal => continue,
-                    o => return o,
+    /// Compare dotted-numeric version strings component-by-component as integers
+    /// (`148.0.7778.216` vs `148.0.7778.179`). Used only to pick the newest
+    /// version directory, so non-numeric components simply count as 0.
+    fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+        use std::cmp::Ordering::Equal;
+        let mut ai = a.split('.');
+        let mut bi = b.split('.');
+        loop {
+            match (ai.next(), bi.next()) {
+                (None, None) => return Equal,
+                (x, y) => {
+                    let xv: u64 = x.unwrap_or("0").parse().unwrap_or(0);
+                    let yv: u64 = y.unwrap_or("0").parse().unwrap_or(0);
+                    match xv.cmp(&yv) {
+                        Equal => continue,
+                        o => return o,
+                    }
                 }
             }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-    #[test]
-    fn cmp_picks_newer_chrome_build() {
-        assert!(cmp_version("148.0.7778.216", "148.0.7778.179").is_gt());
-        // Numeric, not lexicographic: 100 > 99.
-        assert!(cmp_version("148.0.7778.100", "148.0.7778.99").is_gt());
-        assert!(cmp_version("148.0.7778.216", "148.0.7778.216").is_eq());
+        #[test]
+        fn cmp_picks_newer_chrome_build() {
+            assert!(cmp_version("148.0.7778.216", "148.0.7778.179").is_gt());
+            // Numeric, not lexicographic: 100 > 99.
+            assert!(cmp_version("148.0.7778.100", "148.0.7778.99").is_gt());
+            assert!(cmp_version("148.0.7778.216", "148.0.7778.216").is_eq());
+        }
     }
 }

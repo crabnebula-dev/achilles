@@ -403,6 +403,9 @@ dialog::backdrop {
   background: var(--bg-3);
   border-radius: 3px;
   border-left: 2px solid var(--fg-2);
+  /* Rule ids, asar file paths and code samples are long unbroken tokens; wrap
+     them so a finding can't push the detail panel into horizontal scroll. */
+  overflow-wrap: anywhere;
 }
 #detail-body .advisory.high { border-left-color: var(--bad); }
 #detail-body .advisory.critical { border-left-color: var(--bad); }

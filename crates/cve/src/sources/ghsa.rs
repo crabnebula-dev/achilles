@@ -88,10 +88,12 @@ pub async fn lookup(
     let status = res.status();
     let text = res.text().await?;
     if !status.is_success() {
-        return Err(Error::BadPayload(format!(
-            "ghsa {ecosystem}/{name} {status}: {}",
-            truncate(&text, 200)
-        )));
+        return Err(crate::sources::http_error(
+            format!("ghsa {ecosystem}/{name}"),
+            status,
+            &text,
+            200,
+        ));
     }
 
     let parsed: Vec<Advisory0> = serde_json::from_str(&text)
@@ -135,13 +137,5 @@ fn to_advisory(a: Advisory0) -> Advisory {
         aliases,
         published: a.published_at,
         references,
-    }
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        s.to_owned()
-    } else {
-        format!("{}…", &s[..n])
     }
 }

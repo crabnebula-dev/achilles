@@ -193,10 +193,12 @@ async fn fetch_with_retry(
                     backoff(attempt).await;
                     continue;
                 }
-                return Err(Error::BadPayload(format!(
-                    "nvd {cpe_name} {status}: {}",
-                    truncate(&text, 200)
-                )));
+                return Err(crate::sources::http_error(
+                    format!("nvd {cpe_name}"),
+                    status,
+                    &text,
+                    200,
+                ));
             }
             Err(e) => {
                 // Transport-level failure: timeout, connection reset, refused.
@@ -338,14 +340,6 @@ fn match_covers_version(m: &CpeMatch, version: &str) -> bool {
 /// `cpe:2.3:<part>:<vendor>:<product>:<version>:…`.
 fn cpe_version(criteria: &str) -> Option<&str> {
     criteria.split(':').nth(5)
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        s.to_owned()
-    } else {
-        format!("{}…", &s[..n])
-    }
 }
 
 #[cfg(test)]
