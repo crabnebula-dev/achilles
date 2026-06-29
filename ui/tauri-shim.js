@@ -128,6 +128,140 @@ function installWebShim() {
     }
   }
 
+  // ---- EUVD snapshot client (background fetch + offline cache) -----------
+  // EUVD blocks browser-origin requests, so the web build reads a pre-fetched
+  // snapshot from the same origin. The updater runs here on the page: it loads
+  // any cached snapshot into wasm immediately (offline-first) and refreshes it
+  // in the background. Each tab fetches independently — the snapshot is small,
+  // content-addressed, and HTTP/Cache-Storage-cached, so redundant fetches are
+  // cheap and no cross-tab coordination is needed. "Offline mode" (read the
+  // snapshot instead of the live API) is mandatory in the browser.
+  const EUVD_AUTO_KEY = "achilles.euvd.autoUpdate";
+  const FOCUS_THROTTLE_MS = 5 * 60 * 1000;
+  const PERIODIC_MS = 30 * 60 * 1000;
+  const euvdState = { version: null, generatedAt: null, status: "idle", lastCheck: 0 };
+  let euvdUpdater = null; // lazily-imported euvd-updater.js
+  let euvdChecking = false;
+
+  function euvdAutoUpdate() {
+    try {
+      return localStorage.getItem(EUVD_AUTO_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  }
+  function euvdModule() {
+    return (euvdUpdater ??= import("./euvd-updater.js"));
+  }
+  function euvdStatus() {
+    return {
+      // The browser is always offline-mode and can't change it (no direct EUVD).
+      offlineMode: true,
+      offlineModeLocked: true,
+      autoUpdate: euvdAutoUpdate(),
+      version: euvdState.version,
+      generatedAt: euvdState.generatedAt,
+      status: euvdState.status,
+      lastCheck: euvdState.lastCheck || null,
+    };
+  }
+  function euvdNotifyUi() {
+    emit("euvd_status", euvdStatus());
+  }
+
+  // Load whatever snapshot is in Cache Storage into this tab's wasm. Runs at
+  // startup (offline-first) and after each successful update.
+  async function euvdLoadFromCache() {
+    if (!wasm) return;
+    try {
+      const mod = await euvdModule();
+      const snap = await mod.readSnapshot();
+      if (!snap || snap.shards.length === 0) return;
+      for (const s of snap.shards) {
+        wasm.euvd_set_shard(s.vendor, s.product, new Uint8Array(s.bytes));
+      }
+      wasm.euvd_commit(snap.version);
+      euvdState.version = snap.version;
+      euvdState.generatedAt = snap.generatedAt;
+      euvdNotifyUi();
+    } catch (e) {
+      console.warn("euvd: loading cached snapshot failed", e);
+    }
+  }
+
+  // Check the same-origin HEAD for a fresh snapshot; on change, cache it and
+  // load it into wasm. A real page fetch, so it's visible in the Network panel.
+  async function euvdCheck(force) {
+    if (euvdChecking) return;
+    euvdChecking = true;
+    euvdState.status = "checking";
+    euvdNotifyUi();
+    try {
+      const mod = await euvdModule();
+      const r = await mod.checkAndUpdate({ force });
+      euvdState.lastCheck = Date.now();
+      euvdState.status = "idle";
+      if (r.changed) {
+        await euvdLoadFromCache();
+        euvdState.version = r.version;
+        euvdState.generatedAt = r.generatedAt;
+        // Let main.js refresh an open app whose runtime just changed.
+        emit("euvd_updated", {
+          changedShards: r.changedShards ?? [],
+          version: r.version,
+          generatedAt: r.generatedAt,
+        });
+      }
+      euvdNotifyUi();
+    } catch (e) {
+      console.warn("euvd: update check failed", e);
+      euvdState.status = "error";
+      euvdNotifyUi();
+    } finally {
+      euvdChecking = false;
+    }
+  }
+
+  function euvdUpdateNow() {
+    void euvdCheck(true);
+  }
+  function euvdSetAutoUpdate(on) {
+    try {
+      localStorage.setItem(EUVD_AUTO_KEY, on ? "1" : "0");
+    } catch {
+      /* private mode — ignore */
+    }
+    euvdNotifyUi();
+  }
+
+  async function euvdSetup() {
+    if (!wasm) return;
+    // 1) Offline-first: load any cached snapshot into wasm right away.
+    await euvdLoadFromCache();
+    // 2) Refresh in the background. With auto-update off we still seed once if
+    //    nothing is cached, so EUVD works at all; otherwise we leave refreshes
+    //    to an explicit "Update now".
+    const mod = await euvdModule();
+    const haveCached = !!(await mod.currentManifest());
+    if (euvdAutoUpdate() || !haveCached) void euvdCheck(false);
+    // 3) Catch up promptly on reconnect / refocus, throttled.
+    window.addEventListener("online", () => {
+      if (euvdAutoUpdate()) void euvdCheck(false);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (
+        document.visibilityState === "visible" &&
+        euvdAutoUpdate() &&
+        Date.now() - euvdState.lastCheck > FOCUS_THROTTLE_MS
+      ) {
+        void euvdCheck(false);
+      }
+    });
+    setInterval(() => {
+      if (euvdAutoUpdate()) void euvdCheck(false);
+    }, PERIODIC_MS);
+  }
+
   // ---- the `invoke` surface ---------------------------------------------
   async function invoke(cmd, args = {}) {
     await ready; // wasm is loaded asynchronously; never touch it before it's up
@@ -170,6 +304,15 @@ function installWebShim() {
         return;
       case "settings_path":
         return null;
+      // EUVD snapshot controls for the settings dialog.
+      case "euvd_status":
+        return euvdStatus();
+      case "euvd_update_now":
+        euvdUpdateNow();
+        return;
+      case "euvd_set_auto_update":
+        euvdSetAutoUpdate(!!args.enabled);
+        return;
       // Journaling is host-side persistence; not wired up in the browser yet.
       case "journal_save":
         return null;
@@ -590,6 +733,7 @@ function installWebShim() {
       await mod.default();
       wasm = mod;
       markReady();
+      euvdSetup(); // background: fetch/cache the EUVD snapshot, load it into wasm
       const inject = () => {
         injectControls();
         injectDropzone();

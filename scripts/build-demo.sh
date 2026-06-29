@@ -26,7 +26,8 @@ rm -f "$out/pkg/.gitignore" "$out/pkg/package.json" "$out/pkg/README.md" "$out/p
 # The bundler-free UI: copy the static files the demo serves. The app uses only
 # relative URLs, so it runs unchanged under the /browser/ subpath.
 for f in index.html main.js tauri-shim.js styles.css \
-         manifest.webmanifest sw.js icon-192.png icon-512.png icon-maskable.png; do
+         manifest.webmanifest sw.js euvd-updater.js \
+         icon-192.png icon-512.png icon-maskable.png; do
   cp "$root/ui/$f" "$out/$f"
 done
 
