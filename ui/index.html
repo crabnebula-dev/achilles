@@ -116,6 +116,9 @@
     </section>
   </main>
 
+  <!-- Web/WASM adapter: installs a `window.__TAURI__` shim in the browser and
+       no-ops under the desktop Tauri build. Must precede main.js. -->
+  <script type="module" src="./tauri-shim.js"></script>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
