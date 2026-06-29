@@ -23,6 +23,8 @@ out/
 .nuxt/
 .svelte-kit/
 .vite/
+# wasm-pack output for the web build (rebuilt via scripts/build-web.sh)
+/ui/pkg/
 
 # Logs
 *.log
