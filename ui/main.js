@@ -476,6 +476,61 @@ async function openDetail(det) {
   }
 }
 
+// The web build keeps its EUVD data in a background-updated snapshot. When a
+// fresh snapshot lands (see the shim's `euvd_updated` event), re-check the open
+// app: if its CVE set actually gained entries, re-render the pane in place —
+// keeping expanded advisories open and the scroll position, and flashing the
+// newly-added ones. On the desktop build this event never fires.
+function cveIds(cves) {
+  const ids = new Set();
+  if (!cves) return ids;
+  for (const [k, v] of Object.entries(cves)) {
+    if (k === "errors" || k === "unavailable" || !Array.isArray(v)) continue;
+    for (const a of v) if (a?.id) ids.add(a.id);
+  }
+  return ids;
+}
+
+async function refreshOpenDetailCves() {
+  if (detailPanel.hidden || !currentDetail) return;
+  const det = currentDetail;
+  const cache = detailCache.get(det.path);
+  if (!cache) return;
+
+  let report;
+  try {
+    report = await invoke("cve_lookup", { versions: det.versions });
+  } catch {
+    return; // a failed re-check just leaves the current view in place
+  }
+  if (detailPanel.hidden || currentDetail?.path !== det.path) return; // navigated away
+
+  const before = cveIds(cache.cves);
+  const added = [...cveIds(report)].filter((id) => !before.has(id));
+  cache.cves = report; // keep the data fresh regardless
+  if (added.length === 0) return; // nothing new for this app — don't disturb it
+
+  const openIds = new Set(
+    [...detailBody.querySelectorAll("details.advisory[open]")].map((d) => d.dataset.advisoryId),
+  );
+  const scroll = detailBody.scrollTop;
+  detailBody.innerHTML = renderDetail(
+    det,
+    cache.audit,
+    cache.cves,
+    cache.staticScan,
+    cache.depAdvisories,
+    cache.savedAtIso,
+    cache.sideeffects,
+  );
+  for (const d of detailBody.querySelectorAll("details.advisory")) {
+    if (openIds.has(d.dataset.advisoryId)) d.open = true;
+    if (added.includes(d.dataset.advisoryId)) d.classList.add("flash-new");
+  }
+  detailBody.scrollTop = scroll;
+}
+listen("euvd_updated", () => void refreshOpenDetailCves());
+
 function yesNo(b, { yesClass = "bad", noClass = "ok", yesText = "yes", noText = "no" } = {}) {
   return b
     ? `<span class="${yesClass}">${yesText}</span>`
@@ -550,7 +605,7 @@ function renderAdvisory(a) {
   const body = a.summary
     ? escapeHtml(a.summary)
     : `<span class="muted">no description provided</span>`;
-  return `<details class="advisory ${escapeHtml(sev)}">
+  return `<details class="advisory ${escapeHtml(sev)}" data-advisory-id="${escapeHtml(a.id)}">
     <summary><strong>${escapeHtml(a.id)}</strong> ${badge}${fixed}</summary>
     <div class="advisory-body">${body}</div>
   </details>`;

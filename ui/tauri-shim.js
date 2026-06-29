@@ -261,6 +261,100 @@ function installWebShim() {
       if (euvdAutoUpdate()) void euvdCheck(false);
     }, PERIODIC_MS);
   }
+  function euvdAgo(when) {
+    if (when == null) return "never";
+    const then = typeof when === "number" ? when : Date.parse(when);
+    if (Number.isNaN(then)) return "unknown";
+    const secs = Math.max(0, (Date.now() - then) / 1000);
+    for (const [name, size] of [
+      ["year", 31536000],
+      ["month", 2592000],
+      ["day", 86400],
+      ["hour", 3600],
+      ["minute", 60],
+    ]) {
+      const n = Math.floor(secs / size);
+      if (n >= 1) return `${n} ${name}${n === 1 ? "" : "s"} ago`;
+    }
+    return "just now";
+  }
+
+  // The EUVD snapshot controls live in the settings dialog, but only on the web
+  // build — so they're injected here rather than baked into the shared
+  // index.html. They sit directly under the existing EUVD source entry and
+  // collapse when it's unchecked. Offline mode is shown checked + disabled: the
+  // browser can't reach EUVD directly, so reading the bundled snapshot is
+  // mandatory.
+  function injectEuvdSettings() {
+    const form = document.querySelector("#settings-form");
+    if (!form || form.querySelector("#euvd-snapshot-settings")) return;
+    const euvdBox = form.elements["euvd"];
+    const euvdSection = euvdBox?.closest("section");
+    if (!euvdSection) return;
+
+    const box = document.createElement("div");
+    box.id = "euvd-snapshot-settings";
+    box.innerHTML = `
+      <label title="Required in the browser — EUVD blocks direct access from web pages">
+        <input type="checkbox" id="euvd-offline" checked disabled />
+        Offline mode <span class="muted">— read a bundled snapshot (required in the browser)</span>
+      </label>
+      <label>
+        <input type="checkbox" id="euvd-auto" />
+        Auto-update vulnerability databases
+      </label>
+      <p class="muted" id="euvd-updated-label">Checking…</p>
+      <button type="button" id="euvd-update-now">Update now</button>
+      <p class="muted">
+        Vulnerability data: European Union Agency for Cybersecurity (ENISA),
+        <a href="https://euvd.enisa.europa.eu/" target="_blank" rel="noopener noreferrer">EUVD</a>,
+        licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>
+        — bundled snapshot, modified subset.
+      </p>
+    `;
+    euvdSection.appendChild(box);
+
+    // Collapse the snapshot config unless EUVD is the active source. Track the
+    // checkbox live, and re-sync when the dialog opens — main.js sets the
+    // checkbox from saved settings there without firing a `change` event.
+    const syncVisibility = () => {
+      box.hidden = !euvdBox.checked;
+    };
+    euvdBox.addEventListener("change", syncVisibility);
+    const dialog = document.querySelector("#settings-dialog");
+    if (dialog) {
+      new MutationObserver(syncVisibility).observe(dialog, {
+        attributes: true,
+        attributeFilter: ["open"],
+      });
+    }
+    syncVisibility();
+
+    const autoEl = box.querySelector("#euvd-auto");
+    const labelEl = box.querySelector("#euvd-updated-label");
+    const updateBtn = box.querySelector("#euvd-update-now");
+    const render = (st) => {
+      if (!st) return;
+      autoEl.checked = st.autoUpdate !== false;
+      const checking = st.status === "checking";
+      updateBtn.disabled = checking;
+      updateBtn.textContent = checking ? "Updating…" : "Update now";
+      // Track the last *check* (which advances on every "Update now"), not the
+      // snapshot's build time — so a manual check always shows visible feedback,
+      // even when the data turns out to be unchanged.
+      if (checking) labelEl.textContent = "Checking for updates…";
+      else if (st.status === "error") labelEl.textContent = "Update failed — will retry.";
+      else if (!st.version) labelEl.textContent = "Not downloaded yet.";
+      else if (st.lastCheck) labelEl.textContent = `Last checked ${euvdAgo(st.lastCheck)}.`;
+      else labelEl.textContent = `Snapshot from ${euvdAgo(st.generatedAt)}.`;
+    };
+    autoEl.addEventListener("change", () =>
+      void invoke("euvd_set_auto_update", { enabled: autoEl.checked }),
+    );
+    updateBtn.addEventListener("click", () => void invoke("euvd_update_now"));
+    void listen("euvd_status", ({ payload }) => render(payload));
+    render(euvdStatus());
+  }
 
   // ---- the `invoke` surface ---------------------------------------------
   async function invoke(cmd, args = {}) {
@@ -282,16 +376,24 @@ function installWebShim() {
       case "sideeffects":
         return null;
       case "cve_lookup": {
+        // Surface "EUVD not loaded yet" so an empty EUVD bucket never reads as a
+        // clean bill of health while the snapshot is still downloading (or was
+        // never downloaded, offline). It self-heals: the first snapshot commit
+        // emits `euvd_updated`, which re-runs the lookup.
+        const noSnapshot = !wasm.euvd_snapshot_version();
+        const markEuvd = (rep) => {
+          if (noSnapshot && rep && !(rep.unavailable ?? []).includes("EUVD")) {
+            rep.unavailable = [...(rep.unavailable ?? []), "EUVD"];
+          }
+          return rep;
+        };
         const ch = args.onUpdate;
         const onUpdate =
           ch && typeof ch._send === "function"
-            ? (snap) => ch._send(JSON.parse(snap))
+            ? (snap) => ch._send(markEuvd(JSON.parse(snap)))
             : null;
-        const json = await wasm.cve_lookup(
-          JSON.stringify(args.versions ?? {}),
-          onUpdate,
-        );
-        return JSON.parse(json);
+        const json = await wasm.cve_lookup(JSON.stringify(args.versions ?? {}), onUpdate);
+        return markEuvd(JSON.parse(json));
       }
       case "dependency_scan": {
         const json = await wasm.dependency_scan(JSON.stringify(args.deps ?? []));
@@ -737,6 +839,7 @@ function installWebShim() {
       const inject = () => {
         injectControls();
         injectDropzone();
+        injectEuvdSettings();
       };
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", inject, { once: true });
