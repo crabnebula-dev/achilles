@@ -26,6 +26,15 @@ function installWebShim() {
   let markReady;
   const ready = new Promise((resolve) => (markReady = resolve));
 
+  // Achilles' analysis core is WebAssembly; some environments (notably Safari
+  // Lockdown Mode) remove the `WebAssembly` global entirely, so we detect that
+  // and explain it rather than failing with a raw ReferenceError.
+  const WASM_UNAVAILABLE =
+    "Achilles needs WebAssembly, which this browser has disabled — most often " +
+    "Safari Lockdown Mode. Turn off Lockdown Mode for this site, or open Achilles " +
+    "in a Chromium browser on desktop. (On iOS every browser uses WebKit, so only " +
+    "disabling Lockdown Mode helps.)";
+
   // ---- per-app analysis cache -------------------------------------------
   // `analyze_app` / `Analyzer.finish()` return { detection, audit, staticScan }
   // in one pass, but the UI asks for `audit` / `static_scan` separately per
@@ -210,6 +219,7 @@ function installWebShim() {
 
   async function scanViaDirectoryPicker() {
     await ready;
+    if (!wasm) return setStatus(WASM_UNAVAILABLE);
     const dir = await window.showDirectoryPicker({ mode: "read" });
 
     // Either the picked directory *is* a `.app`, or it contains `.app`s.
@@ -260,6 +270,7 @@ function installWebShim() {
 
   async function scanViaFile(file) {
     await ready;
+    if (!wasm) return setStatus(WASM_UNAVAILABLE);
     setStatus(`analysing ${file.name}…`);
     emit("scan_event", { event: "started", total: 1 });
     try {
@@ -405,47 +416,77 @@ function installWebShim() {
       step();
     });
   }
-  async function addEntryToAnalyzer(entry, basePath, analyzer) {
-    const path = `${basePath}/${entry.name}`;
-    if (entry.isDirectory) {
-      for (const child of await readDirEntries(entry)) {
-        await addEntryToAnalyzer(child, path, analyzer);
+  // Resolve a dropped file entry to its File. The File stays valid afterwards,
+  // unlike the entry itself, which Safari invalidates once the drop settles.
+  function entryFile(entry) {
+    return new Promise((resolve, reject) => entry.file(resolve, reject));
+  }
+  // Collect one `.app` directory into { name, files: [{ path, file }] }, with
+  // `path` relative to the bundle root. The whole tree is walked up front,
+  // before any unrelated `await`, for the same Safari-invalidation reason.
+  async function collectApp(appEntry) {
+    const files = [];
+    const walk = async (entry, rel) => {
+      if (entry.isDirectory) {
+        for (const child of await readDirEntries(entry)) {
+          await walk(child, `${rel}/${child.name}`);
+        }
+      } else {
+        files.push({ path: rel, file: await entryFile(entry) });
       }
-    } else {
-      const file = await new Promise((res, rej) => entry.file(res, rej));
-      analyzer.add_file(path, new Uint8Array(await file.arrayBuffer()));
+    };
+    for (const child of await readDirEntries(appEntry)) {
+      await walk(child, `/${child.name}`);
     }
+    return { name: appEntry.name, files };
   }
 
   async function handleDrop(entries, looseFiles, show, hide) {
-    await ready;
+    if (typeof WebAssembly === "undefined") {
+      hide();
+      setStatus(WASM_UNAVAILABLE);
+      return;
+    }
 
-    // `.app` directories: the dropped dir itself, or `.app`s inside a folder.
-    const appDirs = [];
-    for (const dir of entries.filter((en) => en.isDirectory)) {
-      if (dir.name.endsWith(".app")) {
-        appDirs.push(dir);
-      } else {
-        for (const child of await readDirEntries(dir)) {
-          if (child.isDirectory && child.name.endsWith(".app")) appDirs.push(child);
+    // Read the dropped tree into memory FIRST. Safari invalidates dropped
+    // directory entries once the drop settles, so we must not `await` anything
+    // slow (e.g. the wasm load) before walking them.
+    const apps = []; // [{ name, files: [{ path, file }] }]
+    const files = []; // bare .zip / .asar File objects
+    try {
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          if (entry.name.endsWith(".app")) {
+            apps.push(await collectApp(entry));
+          } else {
+            for (const child of await readDirEntries(entry)) {
+              if (child.isDirectory && child.name.endsWith(".app")) {
+                apps.push(await collectApp(child));
+              }
+            }
+          }
+        } else if (/\.(zip|asar)$/i.test(entry.name)) {
+          files.push(await entryFile(entry));
         }
       }
-    }
-    // Supported files: a zipped `.app` or a bare `app.asar`.
-    const files = [];
-    for (const en of entries.filter((x) => x.isFile)) {
-      if (/\.(zip|asar)$/i.test(en.name)) {
-        files.push(await new Promise((res, rej) => en.file(res, rej)));
+      // Browsers without the Entries API only give us plain files.
+      if (!entries.length) {
+        for (const f of looseFiles) {
+          if (/\.(zip|asar)$/i.test(f.name)) files.push(f);
+        }
       }
-    }
-    // Browsers without the Entries API only give us plain files.
-    if (!entries.length) {
-      for (const f of looseFiles) {
-        if (/\.(zip|asar)$/i.test(f.name)) files.push(f);
-      }
+    } catch (err) {
+      console.warn("failed to read the dropped item", err);
+      show(true);
+      setStatus(
+        "Couldn't read the dropped folder — Safari can't reliably read dropped " +
+        "directories. Zip the .app and drop (or ‘Select file’) the .zip instead.",
+      );
+      setTimeout(hide, 4000);
+      return;
     }
 
-    if (appDirs.length + files.length === 0) {
+    if (apps.length + files.length === 0) {
       show(true); // unsupported — warn and refuse
       setStatus("Unsupported drop — use a .app folder, a zipped .app, or an app.asar.");
       setTimeout(hide, 2000);
@@ -453,20 +494,23 @@ function installWebShim() {
     }
     hide();
 
-    emit("scan_event", { event: "started", total: appDirs.length + files.length });
+    await ready;
+    if (!wasm) return setStatus(WASM_UNAVAILABLE);
+
+    emit("scan_event", { event: "started", total: apps.length + files.length });
     let count = 0;
-    for (const dir of appDirs) {
+    for (const app of apps) {
       try {
-        const root = `/scan/${dir.name}`;
+        const root = `/scan/${app.name}`;
         const analyzer = new wasm.Analyzer(root);
-        for (const child of await readDirEntries(dir)) {
-          await addEntryToAnalyzer(child, root, analyzer);
+        for (const { path, file } of app.files) {
+          analyzer.add_file(`${root}${path}`, new Uint8Array(await file.arrayBuffer()));
         }
-        const det = cacheResult(JSON.parse(analyzer.finish()), dir.name);
+        const det = cacheResult(JSON.parse(analyzer.finish()), app.name);
         if (det) emit("scan_event", { event: "detected", ...det });
         count += 1;
       } catch (err) {
-        console.warn("failed to analyse", dir.name, err);
+        console.warn("failed to analyse", app.name, err);
         emit("scan_event", { event: "error", message: String(err) });
       }
     }
@@ -525,6 +569,22 @@ function installWebShim() {
 
   // ---- load the wasm in the background, then enable scanning ------------
   (async () => {
+    if (typeof WebAssembly === "undefined") {
+      // e.g. Safari Lockdown Mode strips `WebAssembly`; the analysis can't run.
+      console.warn("achilles web shim:", WASM_UNAVAILABLE);
+      markReady(); // unblock invoke(); the scan paths guard on `wasm` being null
+      const showUnavailable = () => {
+        injectControls();
+        injectDropzone();
+        setStatus(WASM_UNAVAILABLE);
+      };
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", showUnavailable, { once: true });
+      } else {
+        showUnavailable();
+      }
+      return;
+    }
     try {
       const mod = await import("./pkg/achilles_wasm.js");
       await mod.default();
