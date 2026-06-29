@@ -35,7 +35,7 @@ pub struct TlsException {
 
 pub fn read(app_path: &Path) -> InfoPlistFlags {
     let plist_path = app_path.join("Contents/Info.plist");
-    let Ok(value) = plist::Value::from_file(&plist_path) else {
+    let Some(value) = crate::read_plist(&plist_path) else {
         return InfoPlistFlags::default();
     };
     let Some(dict) = value.as_dictionary() else {

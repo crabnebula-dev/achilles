@@ -1,6 +1,6 @@
 //! Parse the top-level `Contents/Info.plist` of a macOS bundle.
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -19,10 +19,10 @@ pub struct BundleInfo {
 /// [`BundleInfo::default`] rather than erroring — we want the scanner to keep
 /// going. macOS-only: the other platforms fill [`BundleInfo`] from PE version
 /// resources / `.desktop` entries (see [`crate::metadata`]).
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 pub fn read(app_path: &Path) -> BundleInfo {
     let plist_path = app_path.join("Contents/Info.plist");
-    let Ok(value) = plist::Value::from_file(&plist_path) else {
+    let Some(value) = crate::read_plist(&plist_path) else {
         return BundleInfo::default();
     };
     let Some(dict) = value.as_dictionary() else {

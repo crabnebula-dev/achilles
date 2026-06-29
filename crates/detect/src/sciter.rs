@@ -12,7 +12,6 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
-use memmap2::Mmap;
 use regex::bytes::Regex;
 
 use crate::app::Layout;
@@ -23,14 +22,14 @@ static SCITER_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Sciter (\d+\.\d+\.\d+(?:\.\d+)?)").unwrap());
 
 pub fn detect(layout: &Layout) -> Result<Option<String>, crate::DetectError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         // Framework flavour — preferred because it's deterministic.
         let fw = layout.frameworks_dir().join("Sciter.framework");
-        if fw.is_dir() {
+        if vfs::is_dir(&fw) {
             for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
                 let plist = fw.join(rel);
-                if plist.exists() {
+                if vfs::exists(&plist) {
                     if let Some(v) = read_plist_version(&plist) {
                         return Ok(Some(v));
                     }
@@ -65,9 +64,9 @@ fn is_sciter_library(path: &Path) -> bool {
     name.ends_with(".dll") || name.contains(".so") || name.ends_with(".dylib")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 fn read_plist_version(plist_path: &Path) -> Option<String> {
-    let value = plist::Value::from_file(plist_path).ok()?;
+    let value = crate::read_plist(plist_path)?;
     let dict = value.as_dictionary()?;
     dict.get("CFBundleShortVersionString")
         .or_else(|| dict.get("CFBundleVersion"))
@@ -76,15 +75,11 @@ fn read_plist_version(plist_path: &Path) -> Option<String> {
 }
 
 fn scan_library(path: &Path) -> Result<Option<String>, crate::DetectError> {
-    let file = std::fs::File::open(path).map_err(|e| crate::DetectError::Io {
+    let bytes = crate::strings::map_bytes(path).map_err(|source| crate::DetectError::Io {
         path: path.to_path_buf(),
-        source: e,
+        source,
     })?;
-    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| crate::DetectError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    if let Some(caps) = SCITER_VERSION_RE.captures(&mmap) {
+    if let Some(caps) = SCITER_VERSION_RE.captures(&bytes) {
         if let Some(m) = caps.get(1) {
             if let Ok(s) = std::str::from_utf8(m.as_bytes()) {
                 return Ok(Some(s.to_owned()));

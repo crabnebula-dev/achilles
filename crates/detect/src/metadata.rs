@@ -9,7 +9,7 @@ use crate::bundle::BundleInfo;
 /// Read whatever metadata the platform exposes for `app`, falling back to
 /// fields already present on the [`DiscoveredApp`].
 pub fn read(app: &DiscoveredApp) -> BundleInfo {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         // The `.app` carries everything in Info.plist.
         let mut info = crate::bundle::read(&app.root);
@@ -19,7 +19,7 @@ pub fn read(app: &DiscoveredApp) -> BundleInfo {
         info
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(macos_layout)))]
     {
         let mut info = app
             .executable
@@ -31,7 +31,7 @@ pub fn read(app: &DiscoveredApp) -> BundleInfo {
         info
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(macos_layout)))]
     {
         BundleInfo {
             // `.desktop` `Name=` is the only reliable display name; the binary
@@ -43,7 +43,7 @@ pub fn read(app: &DiscoveredApp) -> BundleInfo {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(macos_layout, target_os = "windows", target_os = "linux")))]
     {
         BundleInfo {
             display_name: app.name.clone(),

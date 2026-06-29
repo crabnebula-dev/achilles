@@ -9,7 +9,6 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
-use memmap2::Mmap;
 use regex::bytes::Regex;
 
 /// Captures the Wails crate version from its Go module path, e.g.
@@ -19,25 +18,15 @@ static WAILS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn detect(executable: &Path) -> Result<Option<String>, crate::DetectError> {
-    if !executable.exists() {
+    if !vfs::exists(executable) {
         return Ok(None);
     }
-    let file = match std::fs::File::open(executable) {
-        Ok(f) => f,
-        Err(e) => {
-            return Err(crate::DetectError::Io {
-                path: executable.to_path_buf(),
-                source: e,
-            })
-        }
-    };
-    // Safety: read-only mapping, never aliased as `&mut`.
-    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| crate::DetectError::Io {
+    let bytes = crate::strings::map_bytes(executable).map_err(|source| crate::DetectError::Io {
         path: executable.to_path_buf(),
-        source: e,
+        source,
     })?;
 
-    if let Some(caps) = WAILS_RE.captures(&mmap) {
+    if let Some(caps) = WAILS_RE.captures(&bytes) {
         if let Some(m) = caps.get(1) {
             if let Ok(s) = std::str::from_utf8(m.as_bytes()) {
                 return Ok(Some(s.to_owned()));

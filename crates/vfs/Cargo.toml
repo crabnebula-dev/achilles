@@ -1,0 +1,13 @@
+[package]
+name = "vfs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Minimal filesystem abstraction: std::fs on native, an in-memory tree on wasm"
+
+[dependencies]
+# Intentionally dependency-free. The native backend forwards to std::fs; the
+# wasm backend uses only std collections + a thread-local.

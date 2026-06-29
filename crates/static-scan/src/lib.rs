@@ -27,12 +27,13 @@
 
 use std::path::Path;
 
-use rayon::prelude::*;
+use crate::par::*;
 use serde::Serialize;
 
 mod asar;
 mod ast;
 mod deps;
+mod par;
 mod rules;
 mod scanner;
 
@@ -83,15 +84,15 @@ pub enum ScanError {
 
 /// Scan either an ASAR archive or a directory of source, auto-detected.
 pub fn scan(input: &Path) -> Result<Report, ScanError> {
-    if !input.exists() {
+    if !vfs::exists(input) {
         return Err(ScanError::NotFound(input.to_path_buf()));
     }
-    if input.is_file() {
+    if vfs::is_file(input) {
         match input.extension().and_then(|e| e.to_str()) {
             Some("asar") => scan_asar(input),
             _ => Err(ScanError::UnsupportedInput(input.to_path_buf())),
         }
-    } else if input.is_dir() {
+    } else if vfs::is_dir(input) {
         scan_directory(input)
     } else {
         Err(ScanError::UnsupportedInput(input.to_path_buf()))
@@ -187,8 +188,8 @@ pub fn scan_directory(path: &Path) -> Result<Report, ScanError> {
 
     scanner::run_rules(&ruleset, &corpus, &mut findings);
 
-    let lock = std::fs::read(path.join("package-lock.json")).ok();
-    let pkg = std::fs::read(path.join("package.json")).ok();
+    let lock = vfs::read(path.join("package-lock.json")).ok();
+    let pkg = vfs::read(path.join("package.json")).ok();
     let dependencies = deps::parse(lock.as_deref(), pkg.as_deref());
 
     Ok(Report {

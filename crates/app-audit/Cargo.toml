@@ -8,17 +8,30 @@ authors.workspace = true
 repository.workspace = true
 description = "Audit an installed app for signing, hardening, and ASAR integrity across macOS, Windows, and Linux."
 
+[features]
+# Use the macOS `.app` bundle audit backend (Info.plist flags + ASAR integrity)
+# even when not building for macOS (see build.rs -> `macos_layout`). The wasm
+# build enables this to audit an uploaded `.app`.
+macos-bundle = []
+# Shell out to `codesign` for signature + entitlements facts. Needs a real
+# macOS host and process spawning, so it pulls in tokio and is off on wasm.
+codesign = ["dep:tokio"]
+default = ["codesign"]
+
 [dependencies]
 plist.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+vfs.workspace = true
+tokio = { workspace = true, optional = true }
 
 # Windows / Linux parse the executable directly (PE / ELF) for hardening flags
-# and signature presence; macOS shells to `codesign` and reads Info.plist.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# and signature presence; macOS reads Info.plist + shells to `codesign`. The
+# wasm bundle build uses the macOS backend, so the ELF/PE path (and goblin /
+# memmap2) is excluded there.
+[target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 goblin.workspace = true
 memchr.workspace = true
 memmap2.workspace = true

@@ -7,9 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
-use rayon::prelude::*;
-
 use crate::ast::ParsedProgram;
+use crate::par::*;
 use crate::rules::{Finding, Matcher, Rule};
 
 const SAMPLE_CONTEXT: usize = 120;
@@ -41,7 +40,7 @@ pub struct SourcePath {
 /// are deferred to [`read_corpus`] so they can run in parallel.
 pub fn collect_source_files(root: &Path) -> std::io::Result<Vec<SourcePath>> {
     fn recurse(root: &Path, current: &Path, out: &mut Vec<SourcePath>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(current)? {
+        for entry in vfs::read_dir(current)? {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -85,7 +84,7 @@ pub fn read_corpus(files: &[SourcePath]) -> Vec<Result<FileContent, (String, Str
     files
         .par_iter()
         .map(|f| {
-            std::fs::read(&f.abs)
+            vfs::read(&f.abs)
                 .map(|bytes| FileContent {
                     path: f.rel.clone(),
                     bytes,

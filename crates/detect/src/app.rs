@@ -37,7 +37,7 @@ impl DiscoveredApp {
     /// "open this specific app" case). Platform-specific because the path
     /// means different things on each OS.
     pub fn from_path(path: &Path) -> Self {
-        #[cfg(target_os = "macos")]
+        #[cfg(macos_layout)]
         {
             // Path points at a `.app` directory.
             DiscoveredApp {
@@ -47,7 +47,7 @@ impl DiscoveredApp {
                 name: None,
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(macos_layout))]
         {
             // Path points at an executable.
             let root = path
@@ -179,11 +179,11 @@ impl Layout {
     /// * Windows / Linux: `root` (DLLs / `.so`s sit beside the executable).
     #[allow(dead_code)] // used by the macOS framework probes
     pub(crate) fn frameworks_dir(&self) -> PathBuf {
-        #[cfg(target_os = "macos")]
+        #[cfg(macos_layout)]
         {
             self.root.join("Contents/Frameworks")
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(macos_layout))]
         {
             self.root.clone()
         }
@@ -195,11 +195,11 @@ impl Layout {
     /// * Windows / Linux: `root/resources`.
     #[allow(dead_code)] // used by the non-macOS Electron probe
     pub(crate) fn resources_dir(&self) -> PathBuf {
-        #[cfg(target_os = "macos")]
+        #[cfg(macos_layout)]
         {
             self.root.join("Contents/Resources")
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(macos_layout))]
         {
             self.root.join("resources")
         }
@@ -231,7 +231,7 @@ impl Layout {
         }
         let needle = needle.to_ascii_lowercase();
         for dir in [self.root.clone(), self.root.join("lib")] {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
+            if let Ok(entries) = vfs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
                     if name.contains(&needle) {
@@ -247,11 +247,11 @@ impl Layout {
     #[allow(dead_code)] // used by the non-macOS probes via `has_library`
     fn imports(&self) -> &[String] {
         self.imports.get_or_init(|| {
-            #[cfg(target_os = "macos")]
+            #[cfg(macos_layout)]
             {
                 Vec::new()
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(macos_layout))]
             {
                 self.executable
                     .as_deref()
@@ -289,7 +289,7 @@ fn is_system_dir(dir: &Path) -> bool {
 /// Read the dynamic libraries an executable imports (ELF `DT_NEEDED` on Linux,
 /// the PE import table on Windows), returning lower-cased basenames. Best
 /// effort: any parse failure yields an empty list.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(macos_layout))]
 fn read_imports(exe: &Path) -> Vec<String> {
     let Ok(data) = std::fs::read(exe) else {
         return Vec::new();

@@ -17,20 +17,27 @@
 use std::path::{Path, PathBuf};
 
 mod asar;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(macos_layout)))]
 mod linux;
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 mod macos;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(macos_layout)))]
 mod windows;
 
 pub use asar::{AsarInfo, AsarIntegrityCheck};
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(macos_layout)))]
 pub use linux::{ElfHardening, LinuxAudit, RelroKind, SandboxInfo};
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 pub use macos::{CodeSignature, Entitlements, InfoPlistFlags, MacosAudit, TlsException};
-#[cfg(target_os = "windows")]
+
+/// Read and parse a property list through [`vfs`] (real fs on native, the
+/// in-memory upload tree on wasm). `None` if missing or malformed.
+#[cfg(macos_layout)]
+pub(crate) fn read_plist(path: &Path) -> Option<plist::Value> {
+    plist::Value::from_reader(std::io::Cursor::new(vfs::read(path).ok()?)).ok()
+}
+#[cfg(all(target_os = "windows", not(macos_layout)))]
 pub use windows::{PeHardening, WindowsAudit, WindowsManifest, WindowsSignature};
 
 /// Platform-tagged audit result. Each variant flattens its fields alongside a
@@ -39,11 +46,11 @@ pub use windows::{PeHardening, WindowsAudit, WindowsManifest, WindowsSignature};
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "platform", rename_all = "lowercase")]
 pub enum AppAudit {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     Macos(MacosAudit),
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(macos_layout)))]
     Windows(WindowsAudit),
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(macos_layout)))]
     Linux(LinuxAudit),
     /// A platform with no native audit backend in this build.
     Unsupported { path: PathBuf },
@@ -66,24 +73,24 @@ pub async fn audit(
     root: &Path,
     executable: Option<&Path>,
 ) -> Result<AppAudit, AuditError> {
-    if !path.exists() {
+    if !vfs::exists(path) {
         return Err(AuditError::NotFound(path.to_path_buf()));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         let _ = (root, executable);
         Ok(AppAudit::Macos(macos::audit(path).await))
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(macos_layout)))]
     {
         Ok(AppAudit::Windows(windows::audit(path, root, executable)))
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(macos_layout)))]
     {
         Ok(AppAudit::Linux(linux::audit(path, root, executable)))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(macos_layout, target_os = "windows", target_os = "linux")))]
     {
         let _ = (root, executable);
         Ok(AppAudit::Unsupported {
