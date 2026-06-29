@@ -1,0 +1,104 @@
+name: fixtures
+
+# Two-stage assessment of the self-maintained Electron fixture: one job builds
+# the deliberately-vulnerable target (asar + .app) and publishes it as an
+# artifact; the next job runs the real analyzers against that artifact and
+# checks the results against the human-verified expected-findings manifest
+# (crates/fixtures/electron-sample/expected.json).
+#
+# The fixture is deliberately vulnerable, so the whole workflow is treated as
+# untrusted: it gets read-only repo access and nothing else.
+# No write, packages, or pages/deploy permissions — a compromised build or
+# analysis step can't push, publish, or deploy anything.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, browser-wasm-target, fixtures/electron-sample]
+    paths:
+      - "crates/fixtures/**"
+      - "crates/detect/**"
+      - "crates/static-scan/**"
+      - "crates/app-audit/**"
+      - ".github/workflows/fixtures.yml"
+  pull_request:
+    paths:
+      - "crates/fixtures/**"
+      - "crates/detect/**"
+      - "crates/static-scan/**"
+      - "crates/app-audit/**"
+      - ".github/workflows/fixtures.yml"
+  workflow_dispatch:
+
+jobs:
+  build-fixtures:
+    name: build the fixture target
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub-hosted runners ship a stable Rust toolchain, so no toolchain
+      # action is needed; cache cargo's registry/git + the build dir by hand.
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      # Packs the source into electron-sample.asar + ElectronSample.app. Depends
+      # on no analysis crates, so this stage stays cheap.
+      - name: Build fixture
+        run: cargo run -q -p fixtures --bin build-fixtures -- fixture-out
+      - name: Upload fixture artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-sample-fixture
+          path: fixture-out
+          if-no-files-found: error
+
+  assess:
+    name: assess the target against the manifest
+    needs: build-fixtures
+    # Runs on macOS, where the bundle-layout detect/audit path is the *default*
+    # (`target_os = "macos"`). No feature flag is needed, so this fixture stays
+    # independent of the wasm port's `macos-bundle` feature. The asar/static-scan
+    # half is OS-independent and just rides along on the same runner.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Download fixture artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: electron-sample-fixture
+          path: fixture-out
+      # The same example CLIs shipped with each crate, run against the downloaded
+      # target as Achilles would scan any installed app.
+      - name: detect
+        run: cargo run -q -p detect --example detect -- fixture-out/ElectronSample.app > detect.json
+      - name: static-scan
+        run: cargo run -q -p static-scan --example static-scan -- fixture-out/electron-sample.asar > static.json
+      - name: audit
+        run: cargo run -q -p app-audit --example audit -- fixture-out/ElectronSample.app > audit.json
+      - name: assess against expected manifest
+        run: cargo run -q -p fixtures --bin assess -- detect.json static.json audit.json crates/fixtures/electron-sample/expected.json
+      - name: upload analyzer output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: analyzer-output
+          path: |
+            detect.json
+            static.json
+            audit.json

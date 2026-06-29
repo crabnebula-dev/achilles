@@ -1,0 +1,17 @@
+[package]
+name = "fixtures"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Self-maintained Achilles test fixtures: builds a synthetic, deliberately vulnerable Electron app (asar + .app) for the assessment workflow"
+
+# Intentionally depends on NOTHING from the analysis crates, so making it a
+# workspace member can't pull `macos-bundle`/`codesign` into the unified feature
+# set of normal `cargo build`s. It only packs files + hashes them.
+[dependencies]
+sha2.workspace = true
+serde_json.workspace = true
+
+# `src/bin/build-fixtures.rs` and `src/bin/assess.rs` are picked up automatically.
