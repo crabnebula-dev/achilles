@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Achilles</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#14101a" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
 </head>
 <body>
   <header>
@@ -116,6 +119,9 @@
     </section>
   </main>
 
+  <!-- Web/WASM adapter: installs a `window.__TAURI__` shim in the browser and
+       no-ops under the desktop Tauri build. Must precede main.js. -->
+  <script type="module" src="./tauri-shim.js"></script>
   <script type="module" src="./main.js"></script>
 </body>
 </html>

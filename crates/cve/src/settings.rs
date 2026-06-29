@@ -60,7 +60,11 @@ impl Default for SourceSettings {
             euvd: EuvdSettings { enabled: true },
             osv: OsvSettings { enabled: true },
             nvd: NvdSettings {
-                enabled: true,
+                // Off on the web build: NVD takes an `apiKey` header (a CORS
+                // preflight it doesn't allow from browser origins), and a
+                // client-side key would be exposed. Native keeps it on — the
+                // unauthenticated tier still works there.
+                enabled: cfg!(not(target_arch = "wasm32")),
                 api_key: None,
             },
             ghsa: GhsaSettings {
@@ -97,11 +101,19 @@ pub struct GhsaSettings {
 }
 
 /// Path where settings are stored. `None` if the OS couldn't provide a
-/// config dir (shouldn't happen on macOS/Windows/Linux).
+/// config dir (shouldn't happen on macOS/Windows/Linux), and always `None` on
+/// the web build (no on-disk config).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn settings_path() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("achilles").join("settings.json"))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn settings_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> Settings {
     let Some(path) = settings_path() else {
         return Settings::default();
@@ -112,6 +124,7 @@ pub fn load() -> Settings {
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(settings: &Settings) -> std::io::Result<()> {
     let path = settings_path().ok_or_else(|| {
         std::io::Error::new(
@@ -133,5 +146,18 @@ pub fn save(settings: &Settings) -> std::io::Result<()> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 
+    Ok(())
+}
+
+// On the web there is no on-disk config: settings come from `Settings::default`
+// (OSV + EUVD on, both keyless), and the UI shim persists any user overrides in
+// localStorage and passes them in per call.
+#[cfg(target_arch = "wasm32")]
+pub fn load() -> Settings {
+    Settings::default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn save(_settings: &Settings) -> std::io::Result<()> {
     Ok(())
 }

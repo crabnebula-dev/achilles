@@ -21,17 +21,17 @@ pub struct Detection {
 }
 
 pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         macos::detect(layout)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         portable::detect(layout)
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(macos_layout))]
 mod portable {
     use super::*;
 
@@ -87,7 +87,7 @@ mod portable {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 mod macos {
     use std::path::{Path, PathBuf};
 
@@ -108,7 +108,7 @@ mod macos {
 
     pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
         let framework_dir = layout.frameworks_dir().join(FRAMEWORK);
-        if !framework_dir.is_dir() {
+        if !vfs::is_dir(&framework_dir) {
             return Ok(None);
         }
 
@@ -147,23 +147,23 @@ mod macos {
         for (plist_rel, bin_rel) in LAYOUT_CANDIDATES {
             let plist = framework_dir.join(plist_rel);
             let bin = framework_dir.join(bin_rel);
-            if plist.exists() && bin.exists() {
+            if vfs::exists(&plist) && vfs::exists(&bin) {
                 return (Some(plist), Some(bin));
             }
         }
         let plist = LAYOUT_CANDIDATES
             .iter()
             .map(|(p, _)| framework_dir.join(p))
-            .find(|p| p.exists());
+            .find(|p| vfs::exists(p));
         let bin = LAYOUT_CANDIDATES
             .iter()
             .map(|(_, b)| framework_dir.join(b))
-            .find(|b| b.exists());
+            .find(|b| vfs::exists(b));
         (plist, bin)
     }
 
     fn read_framework_version(plist_path: &Path) -> Option<String> {
-        let value = plist::Value::from_file(plist_path).ok()?;
+        let value = crate::read_plist(plist_path)?;
         let dict = value.as_dictionary()?;
         dict.get("CFBundleVersion")
             .and_then(|v| v.as_string())

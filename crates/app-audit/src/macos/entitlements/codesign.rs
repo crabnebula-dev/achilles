@@ -4,26 +4,14 @@
 //! for the app's entitlements on every current macOS. Older SDKs used
 //! `--entitlements :-` which is still accepted on recent macOS but noisy;
 //! we try the modern form first, fall back to the legacy form.
+//!
+//! This whole module is gated behind the `codesign` feature (it spawns a
+//! process), so the wasm build never compiles it.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Serialize;
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Entitlements {
-    /// Whether `codesign` returned any entitlements at all.
-    pub present: bool,
-    /// Every entitlement key/value pair parsed from the plist, JSON-coerced.
-    pub raw: BTreeMap<String, serde_json::Value>,
-
-    pub allow_jit: bool,
-    pub allow_unsigned_executable_memory: bool,
-    pub disable_executable_page_protection: bool,
-    pub allow_dyld_environment_variables: bool,
-    pub disable_library_validation: bool,
-    pub get_task_allow: bool,
-}
+use super::Entitlements;
 
 pub async fn read(app_path: &Path) -> Entitlements {
     let xml = run_codesign(app_path, &["-d", "--entitlements", "-", "--xml"]).await;

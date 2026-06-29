@@ -8,17 +8,31 @@ authors.workspace = true
 repository.workspace = true
 description = "Detect Electron / Tauri frameworks and their runtime versions across macOS, Windows, and Linux apps"
 
+[features]
+# Use the macOS `.app` bundle layout for detection even when not building for
+# macOS (see build.rs -> `macos_layout` cfg). The wasm build enables this so an
+# uploaded `.app` is analysed with the bundle-layout probes (Info.plist +
+# Frameworks) instead of the portable import-table path.
+macos-bundle = []
+
 [dependencies]
 memchr.workspace = true
-memmap2.workspace = true
 plist.workspace = true
 regex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+vfs.workspace = true
+
+# Binary string-scanning probes mmap the executable on native; on wasm they
+# read it into an owned buffer through `vfs` instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2.workspace = true
 
 # Windows / Linux read framework markers from the binary's import table and PE
-# version resources; macOS relies on `.app` bundle layout + Info.plist instead.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# version resources; macOS (and the wasm bundle build) rely on `.app` bundle
+# layout + Info.plist instead, so the import-table path (and goblin) is excluded
+# there.
+[target.'cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 goblin.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

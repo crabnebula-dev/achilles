@@ -23,10 +23,10 @@ pub struct Detection {
 }
 
 pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         let hermes_dir = layout.frameworks_dir().join("hermes.framework");
-        if hermes_dir.is_dir() {
+        if vfs::is_dir(&hermes_dir) {
             let version = read_hermes_version(&hermes_dir).or(Some("unknown".to_string()));
             return Ok(Some(Detection {
                 version,
@@ -35,7 +35,7 @@ pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> 
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         if layout.has_library("hermes") || layout.has_library("reactnative") {
             return Ok(Some(Detection {
@@ -48,7 +48,7 @@ pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> 
     // Engine not bundled separately — fall back to string-scanning the main
     // executable for RN-specific symbols.
     if let Some(exe) = layout.executable.as_deref() {
-        if exe.exists()
+        if vfs::exists(exe)
             && (strings::contains(exe, b"facebook::react").unwrap_or(false)
                 || strings::contains(exe, b"RCTBridge").unwrap_or(false)
                 || strings::contains(exe, b"RCTRootView").unwrap_or(false))
@@ -63,14 +63,14 @@ pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> 
     Ok(None)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 fn read_hermes_version(framework_dir: &std::path::Path) -> Option<String> {
     for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
         let plist = framework_dir.join(rel);
-        if !plist.exists() {
+        if !vfs::exists(&plist) {
             continue;
         }
-        let value = plist::Value::from_file(&plist).ok()?;
+        let value = crate::read_plist(&plist)?;
         let dict = value.as_dictionary()?;
         if let Some(v) = dict
             .get("CFBundleShortVersionString")

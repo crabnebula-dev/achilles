@@ -158,6 +158,24 @@ code {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(203, 166, 255, 0.3);
 }
+/* Secondary CTA: run the wasm build in the browser, no install. */
+.try-online-btn {
+  display: inline-block;
+  margin-left: 10px;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 650;
+  font-size: 16px;
+  padding: 12px 22px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.try-online-btn:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(203, 166, 255, 0.3);
+}
 .crabnebula-links {
   display: flex;
   flex-wrap: wrap;

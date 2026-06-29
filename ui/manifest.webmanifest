@@ -1,0 +1,15 @@
+{
+  "name": "Achilles — app security auditor",
+  "short_name": "Achilles",
+  "description": "Audit installed apps for outdated runtimes, weak entitlements, and known CVEs — entirely in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14101a",
+  "theme_color": "#14101a",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable.png", "sizes": "432x432", "type": "image/png", "purpose": "maskable" }
+  ]
+}

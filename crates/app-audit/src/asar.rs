@@ -54,7 +54,7 @@ pub struct AsarInfo {
 
 /// Build an [`AsarInfo`] for the Windows / Linux `resources/app.asar` under
 /// `root`, or `None` when the app ships no asar.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(macos_layout))]
 pub fn info(root: &Path) -> Option<AsarInfo> {
     let archive_path = root.join("resources").join("app.asar");
     if !archive_path.is_file() {
@@ -70,10 +70,10 @@ pub fn info(root: &Path) -> Option<AsarInfo> {
 /// Returns `None` if the bundle has no `ElectronAsarIntegrity` entry (i.e.
 /// it's not an Electron app, or it's an Electron app with integrity
 /// disabled). macOS-only: the declared hash lives in `Contents/Info.plist`.
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 pub fn verify_all(app_path: &Path) -> Option<Vec<AsarIntegrityCheck>> {
     let plist_path = app_path.join("Contents/Info.plist");
-    let value = plist::Value::from_file(&plist_path).ok()?;
+    let value = crate::read_plist(&plist_path)?;
     let dict = value.into_dictionary()?;
     let integrity = dict.get("ElectronAsarIntegrity")?.as_dictionary()?;
 
@@ -118,17 +118,17 @@ pub fn verify_all(app_path: &Path) -> Option<Vec<AsarIntegrityCheck>> {
 
 /// SHA-256 of the ASAR header JSON string. See the module docs for layout.
 fn sha256_asar_header(path: &Path) -> std::io::Result<String> {
-    use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
+    let json_buf = read_asar_header(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&json_buf);
+    Ok(format!("{:x}", hasher.finalize()))
+}
 
-    let mut file = std::fs::File::open(path)?;
-
-    // We need four little-endian u32s starting at offset 0.
-    let mut prefix = [0u8; 16];
-    file.read_exact(&mut prefix)?;
+/// Parse the 16-byte pickle prefix and return the validated JSON header length.
+fn parse_asar_header_len(prefix: &[u8; 16]) -> std::io::Result<usize> {
+    use std::io::{Error, ErrorKind};
 
     let outer = u32::from_le_bytes(prefix[0..4].try_into().unwrap());
-    let _header_size = u32::from_le_bytes(prefix[4..8].try_into().unwrap());
-    let _json_pickle_size = u32::from_le_bytes(prefix[8..12].try_into().unwrap());
     let json_len = u32::from_le_bytes(prefix[12..16].try_into().unwrap()) as usize;
 
     if outer != 4 {
@@ -137,7 +137,6 @@ fn sha256_asar_header(path: &Path) -> std::io::Result<String> {
             format!("expected pickle outer=4, got {outer}"),
         ));
     }
-
     // Sanity cap: the header is a JSON directory, rarely more than ~100MB.
     const MAX_HEADER: usize = 256 * 1024 * 1024;
     if json_len > MAX_HEADER {
@@ -146,12 +145,42 @@ fn sha256_asar_header(path: &Path) -> std::io::Result<String> {
             format!("implausible asar header length: {json_len}"),
         ));
     }
+    Ok(json_len)
+}
+
+/// Read just the JSON header bytes. Native seeks so it never loads file bodies;
+/// wasm reads the (already in-memory) archive through `vfs` and slices.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_asar_header(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    let mut prefix = [0u8; 16];
+    file.read_exact(&mut prefix)?;
+    let json_len = parse_asar_header_len(&prefix)?;
 
     file.seek(SeekFrom::Start(16))?;
     let mut json_buf = vec![0u8; json_len];
     file.read_exact(&mut json_buf)?;
+    Ok(json_buf)
+}
 
-    let mut hasher = Sha256::new();
-    hasher.update(&json_buf);
-    Ok(format!("{:x}", hasher.finalize()))
+#[cfg(target_arch = "wasm32")]
+fn read_asar_header(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind};
+
+    let bytes = vfs::read(path)?;
+    if bytes.len() < 16 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "asar shorter than 16 bytes",
+        ));
+    }
+    let prefix: [u8; 16] = bytes[0..16].try_into().unwrap();
+    let json_len = parse_asar_header_len(&prefix)?;
+    let end = 16usize
+        .checked_add(json_len)
+        .filter(|&e| e <= bytes.len())
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "asar header extends past file"))?;
+    Ok(bytes[16..end].to_vec())
 }

@@ -7,6 +7,7 @@
 //! post-filter by version on our side (EUVD entries carry `enisaIdProduct`
 //! arrays that include affected-version strings).
 
+#[cfg(not(target_arch = "wasm32"))]
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::Deserialize;
@@ -14,8 +15,10 @@ use serde::Deserialize;
 use crate::advisory::{severity_from_cvss, Advisory, Severity, Source};
 use crate::{cache, version, Error};
 
+#[cfg(not(target_arch = "wasm32"))]
 const SEARCH_URL: &str = "https://euvdservices.enisa.europa.eu/api/search";
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     #[serde(default)]
@@ -24,7 +27,7 @@ struct SearchResponse {
     total: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Entry {
     id: String,
     #[serde(default)]
@@ -47,7 +50,7 @@ struct Entry {
     products: Vec<Product>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Product {
     /// Affected-version expression, e.g. `"unspecified <86.0.4240.111"`,
     /// `"prior to 73.0.3683.75"`, or `"144.0.7559.99 <144.0.7559.99"`. EUVD
@@ -58,13 +61,16 @@ struct Product {
 }
 
 /// EUVD caps `size` at 100 regardless of what we ask for.
+#[cfg(not(target_arch = "wasm32"))]
 const PAGE_SIZE: u64 = 100;
 /// Hard ceiling on pages fetched, a runaway guard. Google/Chrome is the largest
 /// product at ~34 pages, so this leaves generous headroom and never truncates
 /// in practice.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_PAGES: u64 = 80;
 /// In-flight page requests. EUVD isn't rate-limited, but we don't want a single
 /// lookup to open dozens of sockets at once.
+#[cfg(not(target_arch = "wasm32"))]
 const PAGE_CONCURRENCY: usize = 8;
 
 /// Look up EUVD entries for `(vendor, product)` and return those whose affected
@@ -75,6 +81,7 @@ const PAGE_CONCURRENCY: usize = 8;
 /// `product_version` carries a fix ceiling (and sometimes a lower bound), which
 /// we parse into a range and test `version` against — Chrome advisories list
 /// affected *ranges*, never the exact build, so a literal match finds nothing.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn lookup(
     http: &Client,
     vendor: &str,
@@ -112,7 +119,31 @@ pub async fn lookup(
     Ok(advisories)
 }
 
+/// On the browser build there is no network — EUVD blocks browser-origin
+/// requests (CORS). The trimmed per-runtime snapshot is loaded into memory by
+/// the JS updater ([`snapshot::set_shard`]); the same range filter then runs
+/// against those entries. Keeps the `async` signature so the dispatch in
+/// `lib.rs` is identical on both targets.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::unused_async)]
+pub async fn lookup(
+    _http: &Client,
+    vendor: &str,
+    product: &str,
+    version: &str,
+) -> Result<Vec<Advisory>, Error> {
+    let cache_key = format!("euvd-{vendor}-{product}-{version}");
+    if let Some(cached) = cache::get::<Vec<Advisory>>(&cache_key) {
+        return Ok(cached);
+    }
+
+    let advisories = snapshot::matching(vendor, product, version);
+    cache::put(&cache_key, &advisories);
+    Ok(advisories)
+}
+
 /// Fetch a single page of EUVD search results.
+#[cfg(not(target_arch = "wasm32"))]
 async fn fetch_page(
     http: &Client,
     vendor: &str,
@@ -139,7 +170,8 @@ async fn fetch_page(
             180,
         ));
     }
-    serde_json::from_str(&text).map_err(|e| Error::BadPayload(format!("euvd {vendor}/{product}: {e}")))
+    serde_json::from_str(&text)
+        .map_err(|e| Error::BadPayload(format!("euvd {vendor}/{product}: {e}")))
 }
 
 /// The affected-version range a `product_version` expression describes.
@@ -293,6 +325,66 @@ fn to_advisory(entry: Entry) -> Advisory {
 #[allow(dead_code)]
 fn _severity_ref(_: Severity) {}
 
+/// In-memory EUVD snapshot for the browser build.
+///
+/// EUVD blocks browser-origin requests (CORS), so the web build ships a
+/// pre-fetched per-runtime snapshot as a same-origin static asset. The JS
+/// updater parses each shard's bytes in with [`set_shard`] and marks the set
+/// active with [`commit`]; [`lookup`] then runs the same range filter against
+/// these entries instead of the network. Mirrors the ambient-tree pattern in
+/// `vfs` — one snapshot is active per (single-threaded) wasm tab.
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod snapshot {
+    use super::Entry;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static SHARDS: RefCell<HashMap<(String, String), Vec<Entry>>> =
+            RefCell::new(HashMap::new());
+        static VERSION: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// Parse and store one shard — the trimmed `Entry` array for a
+    /// `(vendor, product)` pair, keyed by the exact strings the lookup passes.
+    pub fn set_shard(vendor: String, product: String, bytes: &[u8]) -> Result<(), String> {
+        let entries: Vec<Entry> = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        SHARDS.with(|s| s.borrow_mut().insert((vendor, product), entries));
+        Ok(())
+    }
+
+    /// Mark the loaded shards as the active snapshot at `version` and drop the
+    /// session CVE memo so a mid-session update can't serve stale advisories.
+    pub fn commit(version: String) {
+        VERSION.with(|v| *v.borrow_mut() = Some(version));
+        crate::cache::clear();
+    }
+
+    /// The active snapshot version, or `None` if nothing is loaded yet (lets the
+    /// UI tell "not yet downloaded" apart from "no advisories").
+    pub fn version() -> Option<String> {
+        VERSION.with(|v| v.borrow().clone())
+    }
+
+    /// Advisories from the loaded shard for `(vendor, product)` whose affected
+    /// range covers `version` — the snapshot equivalent of a live EUVD query,
+    /// running the same `affects` / `to_advisory` pipeline as the native path.
+    /// Returns the public [`super::Advisory`] so `Entry` stays a private detail.
+    pub fn matching(vendor: &str, product: &str, version: &str) -> Vec<super::Advisory> {
+        let entries = SHARDS.with(|s| {
+            s.borrow()
+                .get(&(vendor.to_string(), product.to_string()))
+                .cloned()
+        });
+        entries
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entry| super::affects(entry, version))
+            .map(super::to_advisory)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,12 +431,24 @@ mod tests {
     #[test]
     fn affects_uses_the_fix_ceiling() {
         // Discord's Chromium build is below a 142.x fix → affected.
-        assert!(affects(&product("unspecified <142.0.7444.0"), "138.0.7204.251"));
+        assert!(affects(
+            &product("unspecified <142.0.7444.0"),
+            "138.0.7204.251"
+        ));
         // 1Password's build is at/above the fix → not affected.
-        assert!(!affects(&product("unspecified <142.0.7444.0"), "142.0.7444.265"));
+        assert!(!affects(
+            &product("unspecified <142.0.7444.0"),
+            "142.0.7444.265"
+        ));
         // Numeric, not lexicographic: 138 < 99-suffixed build comparisons.
-        assert!(affects(&product("146.0.7680.153 <146.0.7680.153"), "146.0.7680.99"));
-        assert!(!affects(&product("146.0.7680.153 <146.0.7680.153"), "146.0.7680.153"));
+        assert!(affects(
+            &product("146.0.7680.153 <146.0.7680.153"),
+            "146.0.7680.99"
+        ));
+        assert!(!affects(
+            &product("146.0.7680.153 <146.0.7680.153"),
+            "146.0.7680.153"
+        ));
     }
 
     #[test]

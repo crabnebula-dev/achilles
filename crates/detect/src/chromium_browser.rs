@@ -36,11 +36,11 @@ const BROWSER_BINARIES: &[&str] = &[
 ];
 
 pub fn detect(layout: &Layout) -> Option<Detection> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         macos::detect(layout)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         let exe = layout.executable.as_deref()?;
         let stem = exe
@@ -64,7 +64,7 @@ pub fn detect(layout: &Layout) -> Option<Detection> {
 
 /// True if `dir` contains Chromium runtime support files (`icudtl.dat` or any
 /// `.pak`).
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(macos_layout))]
 fn has_chromium_support(dir: &std::path::Path) -> bool {
     if dir.join("icudtl.dat").exists() {
         return true;
@@ -84,7 +84,7 @@ fn has_chromium_support(dir: &std::path::Path) -> bool {
     false
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 mod macos {
     use std::path::Path;
 
@@ -104,7 +104,7 @@ mod macos {
 
     pub fn detect(layout: &Layout) -> Option<Detection> {
         let frameworks_dir = layout.frameworks_dir();
-        let entries = std::fs::read_dir(&frameworks_dir).ok()?;
+        let entries = vfs::read_dir(&frameworks_dir).ok()?;
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_s = name.to_string_lossy();
@@ -144,7 +144,7 @@ mod macos {
         // directory name *is* the version; we still read its Info.plist when
         // possible, falling back to the directory name itself.
         let mut best: Option<String> = None;
-        for entry in std::fs::read_dir(&versions_dir).ok()?.flatten() {
+        for entry in vfs::read_dir(&versions_dir).ok()?.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             // Skip `Current` and anything that isn't a version directory.
@@ -153,7 +153,10 @@ mod macos {
             }
             let version = read_plist_version(&entry.path().join("Resources/Info.plist"))
                 .unwrap_or_else(|| name.into_owned());
-            if best.as_deref().map_or(true, |b| cmp_version(&version, b).is_gt()) {
+            if best
+                .as_deref()
+                .map_or(true, |b| cmp_version(&version, b).is_gt())
+            {
                 best = Some(version);
             }
         }
@@ -163,7 +166,7 @@ mod macos {
     /// Read `CFBundleShortVersionString` (falling back to `CFBundleVersion`) from a
     /// plist, or `None` if the file is missing/unreadable.
     fn read_plist_version(plist_path: &Path) -> Option<String> {
-        let value = plist::Value::from_file(plist_path).ok()?;
+        let value = crate::read_plist(plist_path)?;
         let dict = value.as_dictionary()?;
         dict.get("CFBundleShortVersionString")
             .or_else(|| dict.get("CFBundleVersion"))

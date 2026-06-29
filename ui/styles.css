@@ -458,3 +458,23 @@ dialog::backdrop {
 }
 #detail-body .cve-panel { display: none; }
 #detail-body .cve-panel.active { display: block; }
+
+/* Briefly highlight an advisory a background EUVD update just added to the open
+   app, so a newly-published vulnerability is noticeable without the pane
+   jumping. */
+@keyframes achilles-flash-new {
+  from { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+  to { background: transparent; }
+}
+#detail-body .advisory.flash-new { animation: achilles-flash-new 2.4s ease-out; }
+
+/* Web-only EUVD snapshot controls, nested under the EUVD source entry in the
+   settings dialog and collapsed (hidden) when EUVD is unchecked. */
+#euvd-snapshot-settings {
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--bg-3);
+}
+#euvd-snapshot-settings[hidden] { display: none; }
+#euvd-snapshot-settings label { display: block; margin: 6px 0; }
+#euvd-snapshot-settings p { margin: 6px 0; }

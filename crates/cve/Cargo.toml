@@ -10,14 +10,25 @@ description = "Look up known CVEs affecting detected runtime versions."
 
 [dependencies]
 detect.workspace = true
-dirs.workspace = true
 futures.workspace = true
-reqwest.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+# Native: reqwest with rustls-tls, tokio for the NVD backoff sleep, and `dirs`
+# for the on-disk cache + settings.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest.workspace = true
 tokio.workspace = true
+dirs.workspace = true
+
+# wasm: reqwest drives the browser `fetch` API (no TLS feature — the browser
+# owns TLS); js-sys for `Date::now`; gloo-timers for the backoff sleep.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+js-sys.workspace = true
+gloo-timers = { version = "0.3", features = ["futures"] }
 
 [dev-dependencies]
 
