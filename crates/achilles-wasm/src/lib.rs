@@ -160,6 +160,31 @@ pub async fn cve_lookup(
     serde_json::to_string(&report).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Load one EUVD snapshot shard — the trimmed advisory array for a
+/// `(vendor, product)` runtime pair — into the in-memory store the CVE lookup
+/// reads. EUVD blocks browser-origin requests (CORS), so the web build reads a
+/// pre-fetched same-origin snapshot instead. Called by the JS updater on page
+/// load and whenever the SharedWorker broadcasts a fresh dataset.
+#[wasm_bindgen]
+pub fn euvd_set_shard(vendor: String, product: String, bytes: Vec<u8>) -> Result<(), JsValue> {
+    cve::euvd_set_shard(vendor, product, &bytes).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Mark the loaded shards as the active snapshot at `version` and clear the
+/// session CVE memo so a mid-session update can't serve stale advisories.
+#[wasm_bindgen]
+pub fn euvd_commit(version: String) {
+    cve::euvd_commit(version);
+}
+
+/// The currently-loaded EUVD snapshot version, or `None` if none is loaded yet.
+/// The UI uses this to tell "snapshot not yet downloaded" apart from "no
+/// advisories" — important so a missing snapshot never reads as "all clear".
+#[wasm_bindgen]
+pub fn euvd_snapshot_version() -> Option<String> {
+    cve::euvd_snapshot_version()
+}
+
 /// Look up CVEs for bundled npm dependencies (the `dependencies` array of a
 /// static-scan `Report`). Resolves with a JSON array of per-package advisories.
 #[wasm_bindgen]

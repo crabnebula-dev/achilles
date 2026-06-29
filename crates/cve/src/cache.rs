@@ -43,6 +43,14 @@ pub fn put<T: Serialize>(key: &str, value: &T) {
     }
 }
 
+/// Drop every cached entry. wasm-only: committing a fresh EUVD snapshot clears
+/// the per-session memo so newly-updated advisories aren't masked by a stale
+/// lookup result from earlier in the session.
+#[cfg(target_arch = "wasm32")]
+pub fn clear() {
+    backend::clear();
+}
+
 /// Reduce a lookup key to a filesystem-/map-safe token.
 fn sanitise(key: &str) -> String {
     key.chars()
@@ -95,5 +103,9 @@ mod backend {
 
     pub fn write_raw(safe_key: &str, bytes: Vec<u8>) {
         STORE.with(|s| s.borrow_mut().insert(safe_key.to_owned(), bytes));
+    }
+
+    pub fn clear() {
+        STORE.with(|s| s.borrow_mut().clear());
     }
 }

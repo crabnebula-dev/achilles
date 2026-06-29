@@ -30,6 +30,29 @@ pub use settings::{
     GhsaSettings, NvdSettings, OsvSettings, Settings, SourceSettings,
 };
 
+/// Load one EUVD snapshot shard into the in-memory store the browser build's
+/// EUVD lookup reads. The web build can't query EUVD directly — it blocks
+/// browser-origin requests (CORS) — so it ships a pre-fetched per-runtime
+/// snapshot as a same-origin static asset. `bytes` is the trimmed `Entry` array
+/// for the `(vendor, product)` pair. wasm-only; driven from `achilles-wasm`.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_set_shard(vendor: String, product: String, bytes: &[u8]) -> Result<(), String> {
+    sources::euvd::snapshot::set_shard(vendor, product, bytes)
+}
+
+/// Mark the loaded EUVD shards as the active snapshot at `version` and clear the
+/// session cache. wasm-only.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_commit(version: String) {
+    sources::euvd::snapshot::commit(version);
+}
+
+/// The active EUVD snapshot version, or `None` if none is loaded yet. wasm-only.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_snapshot_version() -> Option<String> {
+    sources::euvd::snapshot::version()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
