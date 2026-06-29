@@ -30,5 +30,15 @@ for f in index.html main.js tauri-shim.js styles.css \
   cp "$root/ui/$f" "$out/$f"
 done
 
+# Fetch the EUVD snapshot into docs/browser/euvd/ — same-origin static shards
+# the browser reads instead of the CORS-blocked EUVD API. Runs server-side, so
+# no browser Origin → no CORS block. Set SKIP_EUVD=1 to skip when iterating
+# offline (the app still loads; EUVD just reports "not yet downloaded").
+if [ "${SKIP_EUVD:-}" = "1" ]; then
+  echo "skipping EUVD snapshot (SKIP_EUVD=1)"
+else
+  "$root/scripts/fetch-euvd.sh" "$out/euvd"
+fi
+
 echo "demo built → $out"
 echo "preview: python3 -m http.server -d \"$root/docs\" 8081  →  http://localhost:8081/browser/"
