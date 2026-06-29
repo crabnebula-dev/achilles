@@ -514,6 +514,15 @@ function installWebShim() {
     process: { relaunch: async () => {} },
   };
 
+  // ---- register the service worker (installable PWA + offline shell) ----
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker
+        .register("./sw.js")
+        .catch((e) => console.warn("service worker registration failed", e));
+    });
+  }
+
   // ---- load the wasm in the background, then enable scanning ------------
   (async () => {
     try {
