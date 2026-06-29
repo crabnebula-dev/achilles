@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Expected Achilles findings for the deliberately-vulnerable electron-sample",
+    "fixture. GENERATED ONCE from a real analyzer run, then verified by hand —",
+    "see README.md for the line-by-line rationale. The `assess` bin checks that a",
+    "fresh run still produces (at least) everything listed here; it is a",
+    "regression gate, not a description of the analyzers' full output."
+  ],
+  "detection": {
+    "framework": "electron",
+    "confidence": "high",
+    "versions": {
+      "electron": "28.1.0",
+      "chromium": "120.0.6099.109",
+      "node": "18.18.2"
+    }
+  },
+  "staticFindings": [
+    "SANDBOX_JS_CHECK",
+    "NODE_INTEGRATION_JS_CHECK",
+    "CONTEXT_ISOLATION_JS_CHECK",
+    "WEB_SECURITY_JS_CHECK",
+    "CSP_GLOBAL_CHECK"
+  ],
+  "dependencies": [
+    { "name": "lodash", "version": "4.17.20" }
+  ],
+  "audit": {
+    "infoPlist": {
+      "allowsArbitraryLoads": true,
+      "urlSchemes": ["achilles-sample"],
+      "tlsExceptionDomains": ["insecure.example.com"]
+    },
+    "asarIntegrity": {
+      "archiveKey": "Resources/app.asar",
+      "matches": true
+    }
+  }
+}
