@@ -313,6 +313,177 @@ function installWebShim() {
     header.appendChild(fileInput);
   }
 
+  // ---- drag-and-drop: a dashed-border overlay + folder/file dropzone ----
+  // An inviting overlay appears while a file/folder is dragged over the page;
+  // on drop it scans a `.app` folder, a folder of `.app`s, a zipped `.app`, or
+  // a bare `app.asar`, and warns + refuses anything else.
+  function injectDropzone() {
+    if (document.querySelector("#achilles-dropzone")) return;
+
+    const style = document.createElement("style");
+    style.textContent = `
+      #achilles-dropzone {
+        position: fixed; inset: 0; z-index: 99999; display: none;
+        align-items: center; justify-content: center;
+        background: rgba(18, 14, 24, 0.78); pointer-events: none;
+      }
+      #achilles-dropzone.show { display: flex; }
+      #achilles-dropzone .dz-box {
+        margin: 24px; padding: 44px 64px; max-width: 78vw; text-align: center;
+        border: 3px dashed #cba6ff; border-radius: 16px;
+        background: rgba(30, 23, 40, 0.55);
+      }
+      #achilles-dropzone .dz-msg { margin: 0; font-size: 22px; color: #f4eefe; }
+      #achilles-dropzone .dz-sub { margin: 10px 0 0; font-size: 14px; color: #c3b3df; }
+      #achilles-dropzone.reject .dz-box { border-color: #ff6b6b; }
+      #achilles-dropzone.reject .dz-msg { color: #ff8a8a; }
+    `;
+    const el = document.createElement("div");
+    el.id = "achilles-dropzone";
+    el.innerHTML =
+      '<div class="dz-box"><p class="dz-msg"></p><p class="dz-sub"></p></div>';
+    document.head.appendChild(style);
+    document.body.appendChild(el);
+
+    const msg = el.querySelector(".dz-msg");
+    const sub = el.querySelector(".dz-sub");
+    const SUPPORTED = "a .app folder, a zipped .app (.zip), or an app.asar";
+    function show(reject) {
+      msg.textContent = reject ? "Unsupported" : "Drop to scan";
+      sub.textContent = reject ? `Need ${SUPPORTED}.` : SUPPORTED;
+      el.classList.toggle("reject", !!reject);
+      el.classList.add("show");
+    }
+    const hide = () => el.classList.remove("show", "reject");
+
+    let depth = 0;
+    const isFileDrag = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+    window.addEventListener("dragenter", (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      depth += 1;
+      show(false);
+    });
+    window.addEventListener("dragover", (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    });
+    window.addEventListener("dragleave", (e) => {
+      if (!isFileDrag(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) hide();
+    });
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      depth = 0;
+      // The DataTransfer is cleared once this handler returns, so capture the
+      // entries / files synchronously and analyse them afterwards.
+      const items = [...(e.dataTransfer?.items ?? [])].filter(
+        (it) => it.kind === "file",
+      );
+      const entries = items.map((it) => it.webkitGetAsEntry?.()).filter(Boolean);
+      const looseFiles = [...(e.dataTransfer?.files ?? [])];
+      void handleDrop(entries, looseFiles, show, hide);
+    });
+  }
+
+  // Read every entry of a dropped directory (the reader returns them in batches).
+  function readDirEntries(dirEntry) {
+    const reader = dirEntry.createReader();
+    return new Promise((resolve, reject) => {
+      const all = [];
+      const step = () =>
+        reader.readEntries((batch) => {
+          if (batch.length) {
+            all.push(...batch);
+            step();
+          } else {
+            resolve(all);
+          }
+        }, reject);
+      step();
+    });
+  }
+  async function addEntryToAnalyzer(entry, basePath, analyzer) {
+    const path = `${basePath}/${entry.name}`;
+    if (entry.isDirectory) {
+      for (const child of await readDirEntries(entry)) {
+        await addEntryToAnalyzer(child, path, analyzer);
+      }
+    } else {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      analyzer.add_file(path, new Uint8Array(await file.arrayBuffer()));
+    }
+  }
+
+  async function handleDrop(entries, looseFiles, show, hide) {
+    await ready;
+
+    // `.app` directories: the dropped dir itself, or `.app`s inside a folder.
+    const appDirs = [];
+    for (const dir of entries.filter((en) => en.isDirectory)) {
+      if (dir.name.endsWith(".app")) {
+        appDirs.push(dir);
+      } else {
+        for (const child of await readDirEntries(dir)) {
+          if (child.isDirectory && child.name.endsWith(".app")) appDirs.push(child);
+        }
+      }
+    }
+    // Supported files: a zipped `.app` or a bare `app.asar`.
+    const files = [];
+    for (const en of entries.filter((x) => x.isFile)) {
+      if (/\.(zip|asar)$/i.test(en.name)) {
+        files.push(await new Promise((res, rej) => en.file(res, rej)));
+      }
+    }
+    // Browsers without the Entries API only give us plain files.
+    if (!entries.length) {
+      for (const f of looseFiles) {
+        if (/\.(zip|asar)$/i.test(f.name)) files.push(f);
+      }
+    }
+
+    if (appDirs.length + files.length === 0) {
+      show(true); // unsupported — warn and refuse
+      setStatus("Unsupported drop — use a .app folder, a zipped .app, or an app.asar.");
+      setTimeout(hide, 2000);
+      return;
+    }
+    hide();
+
+    emit("scan_event", { event: "started", total: appDirs.length + files.length });
+    let count = 0;
+    for (const dir of appDirs) {
+      try {
+        const root = `/scan/${dir.name}`;
+        const analyzer = new wasm.Analyzer(root);
+        for (const child of await readDirEntries(dir)) {
+          await addEntryToAnalyzer(child, root, analyzer);
+        }
+        const det = cacheResult(JSON.parse(analyzer.finish()), dir.name);
+        if (det) emit("scan_event", { event: "detected", ...det });
+        count += 1;
+      } catch (err) {
+        console.warn("failed to analyse", dir.name, err);
+        emit("scan_event", { event: "error", message: String(err) });
+      }
+    }
+    for (const file of files) {
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const det = cacheResult(JSON.parse(wasm.analyze_app(bytes, file.name)), file.name);
+        if (det) emit("scan_event", { event: "detected", ...det });
+        count += 1;
+      } catch (err) {
+        console.warn("failed to analyse file", err);
+        emit("scan_event", { event: "error", message: String(err) });
+      }
+    }
+    emit("scan_event", { event: "finished", count });
+  }
+
   // ---- export: native save-dialog + writeTextFile → Blob download -------
   let pendingName = "achilles-export.json";
   async function save(opts) {
@@ -350,7 +521,10 @@ function installWebShim() {
       await mod.default();
       wasm = mod;
       markReady();
-      const inject = () => injectControls();
+      const inject = () => {
+        injectControls();
+        injectDropzone();
+      };
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", inject, { once: true });
       } else {
