@@ -1,20 +1,22 @@
-//! Disk cache for advisory lookups.
+//! Cache for advisory lookups.
 //!
 //! Historical CVE data for a given `(source, name, version)` is monotonic:
 //! new advisories appear over time, existing ones don't retroactively change.
 //! So we cache aggressively (24h TTL) and refetch on expiry to pick up
 //! anything new.
 //!
-//! Cache format:
-//!   path:   `<cache_dir>/achilles/cve/<sanitised-key>.json`
-//!   value:  `{ "stored_at": <epoch_secs>, "value": <anything serde> }`
-
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! Envelope (both backends):
+//!   `{ "stored_at": <epoch_secs>, "value": <anything serde> }`
+//!
+//! Storage backend:
+//!   * native — `<cache_dir>/achilles/cve/<sanitised-key>.json`.
+//!   * wasm — an in-memory, per-session map (a browser tab is short-lived and
+//!     the data is monotonic, so on-disk persistence isn't worth the OPFS /
+//!     IndexedDB plumbing here).
 
 use serde::{de::DeserializeOwned, Serialize};
 
-const DEFAULT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const DEFAULT_TTL_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Serialize, serde::Deserialize)]
 struct Envelope<T> {
@@ -23,37 +25,27 @@ struct Envelope<T> {
 }
 
 pub fn get<T: DeserializeOwned>(key: &str) -> Option<T> {
-    let path = cache_path(key)?;
-    let bytes = std::fs::read(&path).ok()?;
+    let bytes = backend::read_raw(&sanitise(key))?;
     let env: Envelope<T> = serde_json::from_slice(&bytes).ok()?;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    if now.saturating_sub(env.stored_at) > DEFAULT_TTL.as_secs() {
+    if crate::now_unix().saturating_sub(env.stored_at) > DEFAULT_TTL_SECS {
         return None;
     }
     Some(env.value)
 }
 
 pub fn put<T: Serialize>(key: &str, value: &T) {
-    let Some(path) = cache_path(key) else {
-        return;
+    let env = Envelope {
+        stored_at: crate::now_unix(),
+        value,
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let stored_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let env = Envelope { stored_at, value };
     if let Ok(bytes) = serde_json::to_vec(&env) {
-        let _ = std::fs::write(&path, bytes);
+        backend::write_raw(&sanitise(key), bytes);
     }
 }
 
-fn cache_path(key: &str) -> Option<PathBuf> {
-    let base = dirs::cache_dir()?.join("achilles").join("cve");
-    let safe: String = key
-        .chars()
+/// Reduce a lookup key to a filesystem-/map-safe token.
+fn sanitise(key: &str) -> String {
+    key.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '@') {
                 c
@@ -61,6 +53,47 @@ fn cache_path(key: &str) -> Option<PathBuf> {
                 '_'
             }
         })
-        .collect();
-    Some(base.join(format!("{safe}.json")))
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod backend {
+    use std::path::PathBuf;
+
+    pub fn read_raw(safe_key: &str) -> Option<Vec<u8>> {
+        std::fs::read(path(safe_key)?).ok()
+    }
+
+    pub fn write_raw(safe_key: &str, bytes: Vec<u8>) {
+        let Some(path) = path(safe_key) else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, bytes);
+    }
+
+    fn path(safe_key: &str) -> Option<PathBuf> {
+        let base = dirs::cache_dir()?.join("achilles").join("cve");
+        Some(base.join(format!("{safe_key}.json")))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod backend {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static STORE: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn read_raw(safe_key: &str) -> Option<Vec<u8>> {
+        STORE.with(|s| s.borrow().get(safe_key).cloned())
+    }
+
+    pub fn write_raw(safe_key: &str, bytes: Vec<u8>) {
+        STORE.with(|s| s.borrow_mut().insert(safe_key.to_owned(), bytes));
+    }
 }

@@ -139,7 +139,8 @@ async fn fetch_page(
             180,
         ));
     }
-    serde_json::from_str(&text).map_err(|e| Error::BadPayload(format!("euvd {vendor}/{product}: {e}")))
+    serde_json::from_str(&text)
+        .map_err(|e| Error::BadPayload(format!("euvd {vendor}/{product}: {e}")))
 }
 
 /// The affected-version range a `product_version` expression describes.
@@ -339,12 +340,24 @@ mod tests {
     #[test]
     fn affects_uses_the_fix_ceiling() {
         // Discord's Chromium build is below a 142.x fix → affected.
-        assert!(affects(&product("unspecified <142.0.7444.0"), "138.0.7204.251"));
+        assert!(affects(
+            &product("unspecified <142.0.7444.0"),
+            "138.0.7204.251"
+        ));
         // 1Password's build is at/above the fix → not affected.
-        assert!(!affects(&product("unspecified <142.0.7444.0"), "142.0.7444.265"));
+        assert!(!affects(
+            &product("unspecified <142.0.7444.0"),
+            "142.0.7444.265"
+        ));
         // Numeric, not lexicographic: 138 < 99-suffixed build comparisons.
-        assert!(affects(&product("146.0.7680.153 <146.0.7680.153"), "146.0.7680.99"));
-        assert!(!affects(&product("146.0.7680.153 <146.0.7680.153"), "146.0.7680.153"));
+        assert!(affects(
+            &product("146.0.7680.153 <146.0.7680.153"),
+            "146.0.7680.99"
+        ));
+        assert!(!affects(
+            &product("146.0.7680.153 <146.0.7680.153"),
+            "146.0.7680.153"
+        ));
     }
 
     #[test]
