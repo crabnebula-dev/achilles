@@ -88,6 +88,75 @@
         </p>
       </section>
 
+      <section class="source source--primary">
+        <label>
+          <input type="checkbox" name="report_enabled" />
+          <strong>Fleet reporting</strong>
+          <span class="muted">&mdash; periodically report an app inventory to a collector</span>
+        </label>
+        <p class="muted">
+          When on, the app runs in the background (tray) and POSTs an inventory
+          — installed apps, their versions, and detected runtimes — to your
+          collector on a schedule. No CVE data is sent. Off by default.
+        </p>
+        <label class="field">
+          <span>Collector URL</span>
+          <input type="url" name="collector_url" placeholder="https://collector.example.com/v1/reports" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Bearer token</span>
+          <input type="password" name="report_token" placeholder="sent as Authorization: Bearer …" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Fleet id</span>
+          <input type="text" name="fleet_id" placeholder="e.g. acme-corp" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Reassess every</span>
+          <input type="number" name="interval_minutes" min="1" max="10080" step="1" style="width:6em" />
+          <span class="muted">minutes</span>
+        </label>
+        <label>
+          <input type="checkbox" name="report_autostart" />
+          <span>Start at login (run in background)</span>
+        </label>
+        <p class="muted">
+          <button type="button" id="reassess-now">Reassess now</button>
+          <span id="reassess-status"></span>
+        </p>
+      </section>
+
+      <section class="source">
+        <label>
+          <input type="checkbox" name="vdb_enabled" />
+          <strong>Trusted VDB host</strong>
+          <span class="muted">&mdash; match CVEs against a downloaded snapshot</span>
+        </label>
+        <p class="muted">
+          Download a vulnerability-database snapshot from a trusted host and
+          match versions locally (offline). Avoids per-device NVD rate limits and
+          leaking queries. Falls back to the public sources when the snapshot is
+          missing or a runtime isn't covered.
+        </p>
+        <label class="field">
+          <span>Snapshot URL</span>
+          <input type="url" name="vdb_url" placeholder="https://fleet.example.com/vdb/latest.json" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Token (optional)</span>
+          <input type="password" name="vdb_token" placeholder="defaults to the reporting token" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Refresh every</span>
+          <input type="number" name="vdb_refresh_minutes" min="5" max="20160" step="1" style="width:6em" />
+          <span class="muted">minutes</span>
+        </label>
+        <p class="muted">
+          <button type="button" id="refresh-vdb-now">Refresh VDB now</button>
+          <span id="vdb-status"></span>
+        </p>
+      </section>
+
       <footer>
         <button type="button" id="settings-cancel">Cancel</button>
         <button type="submit" id="settings-save">Save</button>

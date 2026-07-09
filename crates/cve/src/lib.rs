@@ -67,6 +67,8 @@ pub struct CveReport {
     pub electron: Vec<Advisory>,
     pub tauri: Vec<Advisory>,
     pub node: Vec<Advisory>,
+    /// Deno runtime advisories (`cpe:2.3:a:deno:deno:*`).
+    pub deno: Vec<Advisory>,
     pub chromium: Vec<Advisory>,
     pub flutter: Vec<Advisory>,
     pub qt: Vec<Advisory>,
@@ -99,11 +101,12 @@ pub struct CveReport {
 }
 
 /// Which [`CveReport`] field a concurrent lookup feeds into.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Bucket {
     Electron,
     Tauri,
     Node,
+    Deno,
     Chromium,
     Flutter,
     Qt,
@@ -122,6 +125,7 @@ impl CveReport {
             Bucket::Electron => &mut self.electron,
             Bucket::Tauri => &mut self.tauri,
             Bucket::Node => &mut self.node,
+            Bucket::Deno => &mut self.deno,
             Bucket::Chromium => &mut self.chromium,
             Bucket::Flutter => &mut self.flutter,
             Bucket::Qt => &mut self.qt,
@@ -218,6 +222,11 @@ impl Client_ {
         // lifetime of the concurrent run, like the other version references.
         let cef_chromium = versions.cef.as_deref().and_then(cef_chromium_version);
 
+        // Trusted-host VDB snapshot, if one has been downloaded. When it covers
+        // a product we match locally against it and skip the public sources for
+        // that bucket; anything it doesn't cover falls back to the live path.
+        let snapshot = sources::snapshot::load();
+
         // One lookup future per (runtime, source). They're independent network
         // calls, so we run them all concurrently rather than awaiting each in
         // turn — a multi-runtime Electron app would otherwise pay for a dozen
@@ -229,10 +238,51 @@ impl Client_ {
             BoxFuture<'_, (Bucket, &'static str, String, Result<Vec<Advisory>, Error>)>,
         > = Vec::new();
 
+        // Buckets answered locally from the snapshot; the public `task!` macro
+        // skips these so a covered product never hits the network (with a live
+        // fallback for anything the snapshot doesn't cover).
+        let mut snapshot_buckets: std::collections::HashSet<Bucket> =
+            std::collections::HashSet::new();
+        if let Some(snap) = &snapshot {
+            // (bucket, snapshot product key, detected version). CEF matches the
+            // `chromium` product against its embedded build.
+            let targets: [(Bucket, &str, Option<&String>); 14] = [
+                (Bucket::Electron, "electron", versions.electron.as_ref()),
+                (Bucket::Tauri, "tauri", versions.tauri.as_ref()),
+                (Bucket::Node, "node", versions.node.as_ref()),
+                (Bucket::Deno, "deno", versions.deno.as_ref()),
+                (Bucket::Chromium, "chromium", versions.chromium.as_ref()),
+                (Bucket::Cef, "chromium", cef_chromium.as_ref()),
+                (Bucket::Flutter, "flutter", versions.flutter.as_ref()),
+                (Bucket::Qt, "qt", versions.qt.as_ref()),
+                (Bucket::Nwjs, "nwjs", versions.nwjs.as_ref()),
+                (Bucket::ReactNative, "react_native", versions.react_native.as_ref()),
+                (Bucket::Wails, "wails", versions.wails.as_ref()),
+                (Bucket::Sciter, "sciter", versions.sciter.as_ref()),
+                (Bucket::Webkit, "webkit", versions.webkit.as_ref()),
+                (Bucket::Java, "java", versions.java.as_ref()),
+            ];
+            for (bucket, product, version) in targets {
+                let (Some(v), true) = (version, snap.covers(product)) else {
+                    continue;
+                };
+                let advisories = snap.advisories_for(product, v);
+                let prefix = format!("[snapshot] {product} {v}");
+                tasks.push(Box::pin(async move {
+                    (bucket, "snapshot", prefix, Ok(advisories))
+                }));
+                snapshot_buckets.insert(bucket);
+            }
+        }
+
+        // A public-source lookup future, unless the snapshot already answered
+        // this bucket (in which case we don't touch the network for it).
         macro_rules! task {
             ($bucket:expr, $src:literal, $name:literal, $v:expr, $fut:expr) => {{
-                let prefix = format!("[{}] {} {}", $src, $name, $v);
-                tasks.push(Box::pin(async move { ($bucket, $src, prefix, $fut.await) }));
+                if !snapshot_buckets.contains(&$bucket) {
+                    let prefix = format!("[{}] {} {}", $src, $name, $v);
+                    tasks.push(Box::pin(async move { ($bucket, $src, prefix, $fut.await) }));
+                }
             }};
         }
 
@@ -319,6 +369,27 @@ impl Client_ {
                     "node",
                     v,
                     sources::euvd::lookup(http, "Node.js", "Node.js", v)
+                );
+            }
+        }
+
+        if let Some(v) = &versions.deno {
+            if s.nvd.enabled {
+                task!(
+                    Bucket::Deno,
+                    "nvd",
+                    "deno",
+                    v,
+                    sources::nvd::lookup_cpe_with_key(http, "deno", "deno", v, s.nvd.api_key.as_deref())
+                );
+            }
+            if s.euvd.enabled {
+                task!(
+                    Bucket::Deno,
+                    "euvd",
+                    "deno",
+                    v,
+                    sources::euvd::lookup(http, "Deno", "Deno", v)
                 );
             }
         }
@@ -691,6 +762,7 @@ fn apply_relevance_filter(report: &mut CveReport, versions: &Versions) {
     filter(&mut report.electron, versions.electron.as_ref(), None);
     filter(&mut report.tauri, versions.tauri.as_ref(), None);
     filter(&mut report.node, versions.node.as_ref(), None);
+    filter(&mut report.deno, versions.deno.as_ref(), None);
     filter(&mut report.chromium, versions.chromium.as_ref(), None);
     filter(&mut report.flutter, versions.flutter.as_ref(), None);
     filter(&mut report.qt, versions.qt.as_ref(), None);
@@ -776,6 +848,7 @@ fn apply_age_filter(report: &mut CveReport, max_age_years: Option<u32>) {
     filter(&mut report.electron);
     filter(&mut report.tauri);
     filter(&mut report.node);
+    filter(&mut report.deno);
     filter(&mut report.chromium);
     filter(&mut report.flutter);
     filter(&mut report.qt);

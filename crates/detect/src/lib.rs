@@ -21,6 +21,7 @@ mod app;
 mod bundle;
 mod cef;
 mod chromium_browser;
+mod deno;
 mod electron;
 mod flutter;
 mod java;
@@ -64,6 +65,9 @@ pub enum Framework {
     ReactNative,
     /// Uses Wails (Go + system webview).
     Wails,
+    /// Deno-desktop app: a bundled Deno runtime driving a system webview (or a
+    /// bundled CEF/Chromium, captured separately in [`Versions::cef`]).
+    Deno,
     /// Uses Sciter (HTML/CSS UI engine).
     Sciter,
     /// JVM-based app (bundled JRE with a `release` file).
@@ -108,6 +112,9 @@ pub struct Versions {
     pub node: Option<String>,
     /// Tauri crate version (e.g. `"2.1.0"`).
     pub tauri: Option<String>,
+    /// Deno runtime version (e.g. `"2.7.5"`), for Deno-desktop apps that
+    /// bundle the Deno runtime.
+    pub deno: Option<String>,
     /// Chromium Embedded Framework version, if the bundle contains the CEF
     /// framework. Populated independently of [`Framework`]: a Tauri app
     /// that also bundles CEF will show both.
@@ -229,6 +236,10 @@ pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
         Some(exe) => wails::detect(exe)?,
         None => None,
     };
+    let deno_version = match layout.executable.as_deref() {
+        Some(exe) => deno::detect(exe)?,
+        None => None,
+    };
     let sciter_version = sciter::detect(&layout)?;
     let java_probe = java::detect(&layout);
     // Effective system webview engine version (macOS WKWebView / Windows
@@ -242,6 +253,7 @@ pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
         nwjs: nwjs_probe.as_ref().and_then(|n| n.nwjs_version.clone()),
         react_native: rn_probe.as_ref().and_then(|r| r.version.clone()),
         wails: wails_version.clone(),
+        deno: deno_version.clone(),
         sciter: sciter_version.clone(),
         java: java_probe.as_ref().and_then(|j| j.version.clone()),
         // Chromium from QtWebEngine takes precedence over nwjs chromium
@@ -338,6 +350,21 @@ pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
             &layout,
             &bundle,
             Framework::Wails,
+            Confidence::High,
+            versions,
+        ));
+    }
+
+    if deno_version.is_some() {
+        let mut versions = extra_versions.clone();
+        // Deno desktop renders via the system webview unless it bundles CEF
+        // (already captured in `versions.cef`).
+        system_webview::apply(system_webview.as_ref(), &mut versions);
+        return Ok(build(
+            identity,
+            &layout,
+            &bundle,
+            Framework::Deno,
             Confidence::High,
             versions,
         ));
@@ -469,6 +496,9 @@ fn merge_versions(mut base: Versions, extra: &Versions) -> Versions {
     }
     if base.tauri.is_none() {
         base.tauri = extra.tauri.clone();
+    }
+    if base.deno.is_none() {
+        base.deno = extra.deno.clone();
     }
     if base.cef.is_none() {
         base.cef = extra.cef.clone();

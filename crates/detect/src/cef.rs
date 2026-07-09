@@ -3,15 +3,20 @@
 //! CEF ships its own runtime, independent of Electron. An app can be *both*
 //! Tauri and CEF, so this probe runs regardless of the primary verdict.
 //!
-//! * **macOS**: `Contents/Frameworks/Chromium Embedded Framework.framework`,
-//!   whose Info.plist exposes the version as `CFBundleShortVersionString`
-//!   (e.g. `130.1.18+g5e85b92+chromium-130.0.6723.117`).
+//! We report the **embedded Chromium build** (e.g. `147.0.7727.138`) so it can
+//! be matched against Chromium CVEs (`cpe:2.3:a:google:chrome:*`).
+//!
+//! * **macOS**: `Contents/Frameworks/Chromium Embedded Framework.framework`.
+//!   The plist's `CFBundleShortVersionString` is the *CEF* release version
+//!   (e.g. `147.0.11.0`), which does **not** match Chromium CVE CPEs — so we
+//!   string-scan the framework binary's `Chrome/<version>` UA marker for the
+//!   real Chromium build, falling back to the plist only if that fails.
 //! * **Windows / Linux**: `libcef.dll` / `libcef.so` beside the executable (or
 //!   imported by it). The Chromium version is string-scanned from that library.
 
 use crate::app::Layout;
 
-/// Return the CEF version string if the app embeds CEF, else `None`.
+/// Return the embedded Chromium build if the app embeds CEF, else `None`.
 pub fn detect(layout: &Layout) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
@@ -21,6 +26,26 @@ pub fn detect(layout: &Layout) -> Option<String> {
         if !framework_dir.is_dir() {
             return None;
         }
+        // Prefer the real Chromium build scanned from the framework binary's
+        // UA string. The binary lives at the framework root (a symlink into
+        // `Versions/Current`) on a normal layout; try the versioned paths too.
+        for bin in &[
+            "Chromium Embedded Framework",
+            "Versions/Current/Chromium Embedded Framework",
+            "Versions/A/Chromium Embedded Framework",
+        ] {
+            let path = framework_dir.join(bin);
+            if path.is_file() {
+                if let Some(v) = crate::strings::scan_electron_versions(&path)
+                    .ok()
+                    .and_then(|(chromium, _)| chromium)
+                {
+                    return Some(v);
+                }
+            }
+        }
+        // Fall back to the plist's CEF version if the scan found nothing —
+        // better than no signal, though it won't match Chromium CVE CPEs.
         for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
             let plist_path = framework_dir.join(rel);
             if !plist_path.exists() {

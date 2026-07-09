@@ -185,6 +185,56 @@ pub async fn settings_path() -> Option<String> {
     cve::settings_path().map(|p| p.to_string_lossy().into_owned())
 }
 
+// ---------- fleet reporting ------------------------------------------
+
+/// Trigger a reassessment + report now. Routed through the shared guarded
+/// runner so it can't overlap a scheduled or tray-triggered run.
+#[tauri::command]
+pub async fn reassess_now(app: AppHandle) -> Result<(), String> {
+    crate::run_reassessment(app).await;
+    Ok(())
+}
+
+/// Return the persisted fleet-reporting config (defaults if none saved yet).
+#[tauri::command]
+pub async fn get_reporting_config() -> Result<crate::reporting::ReportingConfig, String> {
+    Ok(crate::reporting::load())
+}
+
+/// Persist the fleet-reporting config and bring the OS login-item state in
+/// line with its `autostart` flag.
+#[tauri::command]
+pub async fn set_reporting_config(
+    app: AppHandle,
+    config: crate::reporting::ReportingConfig,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    crate::reporting::save(&config).map_err(|e| e.to_string())?;
+
+    let manager = app.autolaunch();
+    let is_on = manager.is_enabled().unwrap_or(false);
+    if config.autostart && !is_on {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else if !config.autostart && is_on {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Where the reporting config file lives, for display in the UI.
+#[tauri::command]
+pub async fn reporting_config_path() -> Option<String> {
+    crate::reporting::path()
+}
+
+/// Download the trusted-host VDB snapshot now. No-op when VDB sourcing is
+/// disabled/unconfigured. Progress is reported via the `vdb_status` event.
+#[tauri::command]
+pub async fn refresh_vdb_now(app: AppHandle) -> Result<(), String> {
+    crate::reporting::refresh_vdb_snapshot(app).await
+}
+
 // ---------- journal --------------------------------------------------
 
 /// Arguments for `journal_save`. The payload is frontend-assembled and kept
@@ -261,6 +311,7 @@ pub struct CveLookupArgs {
     pub chromium: Option<String>,
     pub node: Option<String>,
     pub tauri: Option<String>,
+    pub deno: Option<String>,
     pub cef: Option<String>,
     pub nwjs: Option<String>,
     pub flutter: Option<String>,
@@ -279,6 +330,7 @@ impl From<CveLookupArgs> for detect::Versions {
             chromium: v.chromium,
             node: v.node,
             tauri: v.tauri,
+            deno: v.deno,
             cef: v.cef,
             nwjs: v.nwjs,
             flutter: v.flutter,
