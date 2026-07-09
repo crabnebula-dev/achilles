@@ -229,7 +229,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// `2026-04-20T09:12:34Z` rendered from unix seconds. Hand-rolled to avoid
 /// pulling in `chrono`; millisecond/ns precision would be nice but isn't
 /// load-bearing for a journal.
-fn format_iso(unix_secs: u64) -> String {
+pub(crate) fn format_iso(unix_secs: u64) -> String {
     const SECS_PER_MINUTE: u64 = 60;
     const SECS_PER_HOUR: u64 = 3600;
     const SECS_PER_DAY: u64 = 86_400;

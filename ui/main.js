@@ -574,6 +574,7 @@ function runtimeCvesContent(cves) {
     { key: "chromium", label: "Chromium" },
     { key: "cef", label: "CEF (Chromium)" },
     { key: "node", label: "Node.js" },
+    { key: "deno", label: "Deno" },
     { key: "tauri", label: "Tauri" },
     { key: "flutter", label: "Flutter" },
     { key: "qt", label: "Qt" },
@@ -998,6 +999,7 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
     ["chromium", v.chromium],
     ["node", v.node],
     ["tauri", v.tauri],
+    ["deno", v.deno],
     ["cef", v.cef],
     ["nwjs", v.nwjs],
     ["flutter", v.flutter],
@@ -1218,6 +1220,45 @@ function applySettingsToForm(s) {
     age == null ? "0" : String(age);
 }
 
+// ---------- fleet reporting config ----------------------------------
+
+function formToReportingConfig() {
+  const fd = new FormData(settingsForm);
+  const str = (v) => (v ?? "").toString().trim();
+  const minutesRaw = str(fd.get("interval_minutes"));
+  const minutes = Math.max(1, parseInt(minutesRaw, 10) || 360); // default 6h
+  const vdbMinsRaw = str(fd.get("vdb_refresh_minutes"));
+  const vdbMins = Math.max(5, parseInt(vdbMinsRaw, 10) || 1440); // default daily
+  return {
+    enabled: fd.has("report_enabled"),
+    collector_url: str(fd.get("collector_url")),
+    token: str(fd.get("report_token")),
+    fleet_id: str(fd.get("fleet_id")),
+    interval_secs: minutes * 60,
+    autostart: fd.has("report_autostart"),
+    vdb_enabled: fd.has("vdb_enabled"),
+    vdb_url: str(fd.get("vdb_url")),
+    vdb_token: str(fd.get("vdb_token")),
+    vdb_refresh_secs: vdbMins * 60,
+  };
+}
+
+function applyReportingConfigToForm(c) {
+  const cfg = c ?? {};
+  settingsForm.elements["report_enabled"].checked = Boolean(cfg.enabled);
+  settingsForm.elements["collector_url"].value = cfg.collector_url ?? "";
+  settingsForm.elements["report_token"].value = cfg.token ?? "";
+  settingsForm.elements["fleet_id"].value = cfg.fleet_id ?? "";
+  const secs = Number.isFinite(cfg.interval_secs) ? cfg.interval_secs : 21600;
+  settingsForm.elements["interval_minutes"].value = String(Math.max(1, Math.round(secs / 60)));
+  settingsForm.elements["report_autostart"].checked = Boolean(cfg.autostart);
+  settingsForm.elements["vdb_enabled"].checked = Boolean(cfg.vdb_enabled);
+  settingsForm.elements["vdb_url"].value = cfg.vdb_url ?? "";
+  settingsForm.elements["vdb_token"].value = cfg.vdb_token ?? "";
+  const vdbSecs = Number.isFinite(cfg.vdb_refresh_secs) ? cfg.vdb_refresh_secs : 86400;
+  settingsForm.elements["vdb_refresh_minutes"].value = String(Math.max(5, Math.round(vdbSecs / 60)));
+}
+
 // Whether an NVD API key is configured. Cached so the runtime-CVE pane can
 // suggest adding one when NVD is rate-limited (without re-fetching settings on
 // every repaint). Refreshed at boot and after the settings form is saved.
@@ -1233,11 +1274,13 @@ async function refreshNvdKeyState() {
 
 async function openSettings() {
   try {
-    const [settings, path] = await Promise.all([
+    const [settings, path, reporting] = await Promise.all([
       invoke("get_settings"),
       invoke("settings_path").catch(() => null),
+      invoke("get_reporting_config").catch(() => null),
     ]);
     applySettingsToForm(settings);
+    applyReportingConfigToForm(reporting);
     settingsPathEl.textContent = path ? `stored at: ${path}` : "";
     if (typeof settingsDialog.showModal === "function") {
       settingsDialog.showModal();
@@ -1267,13 +1310,69 @@ settingsCancelBtn.addEventListener("click", (e) => {
 settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const settings = formToSettings();
+  const config = formToReportingConfig();
   try {
     await invoke("set_settings", { settings });
+    await invoke("set_reporting_config", { config });
     nvdApiKeyConfigured = Boolean(settings?.sources?.nvd?.api_key);
     closeSettings();
     setStatus("settings saved");
   } catch (err) {
     alert(`Save failed: ${err}`);
+  }
+});
+
+// "Reassess now" triggers an immediate inventory + report. The button stays in
+// the settings dialog; status streams back over the `reassess_status` event.
+const reassessBtn = document.querySelector("#reassess-now");
+const reassessStatusEl = document.querySelector("#reassess-status");
+reassessBtn?.addEventListener("click", async () => {
+  reassessBtn.disabled = true;
+  reassessStatusEl.textContent = " reassessing…";
+  try {
+    await invoke("reassess_now");
+  } catch (err) {
+    reassessStatusEl.textContent = ` error: ${err}`;
+  } finally {
+    reassessBtn.disabled = false;
+  }
+});
+
+listen("reassess_status", ({ payload }) => {
+  if (!reassessStatusEl) return;
+  if (payload.ok) {
+    reassessStatusEl.textContent = payload.skipped
+      ? ` ${payload.count} apps inventoried (reporting off — nothing sent) · ${payload.at_iso}`
+      : ` reported ${payload.count} apps · ${payload.at_iso}`;
+  } else {
+    reassessStatusEl.textContent = ` failed: ${payload.error ?? "unknown error"}`;
+  }
+});
+
+// "Refresh VDB now" pulls the trusted-host snapshot; status streams over the
+// `vdb_status` event.
+const refreshVdbBtn = document.querySelector("#refresh-vdb-now");
+const vdbStatusEl = document.querySelector("#vdb-status");
+refreshVdbBtn?.addEventListener("click", async () => {
+  refreshVdbBtn.disabled = true;
+  vdbStatusEl.textContent = " refreshing…";
+  try {
+    await invoke("refresh_vdb_now");
+  } catch (err) {
+    vdbStatusEl.textContent = ` error: ${err}`;
+  } finally {
+    refreshVdbBtn.disabled = false;
+  }
+});
+
+listen("vdb_status", ({ payload }) => {
+  if (!vdbStatusEl) return;
+  if (payload.skipped) {
+    vdbStatusEl.textContent = " VDB sourcing off";
+  } else if (payload.ok) {
+    vdbStatusEl.textContent = ` snapshot updated · ${payload.products} products · ${payload.at_iso}`;
+  } else {
+    vdbStatusEl.textContent = ` failed: ${payload.error ?? "unknown error"}`;
   }
 });
 

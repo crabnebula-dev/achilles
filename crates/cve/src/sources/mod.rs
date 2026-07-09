@@ -8,6 +8,7 @@ pub mod euvd;
 pub mod ghsa;
 pub mod nvd;
 pub mod osv;
+pub mod snapshot;
 
 /// Build the [`crate::Error`] for a failed HTTP response. A `5xx` / `429`
 /// classifies as [`crate::Error::Unavailable`] (transient, kept out of the
