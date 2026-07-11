@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = ["tray-icon"] }
+tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
@@ -36,3 +36,13 @@ cve.workspace = true
 app-audit.workspace = true
 static-scan.workspace = true
 sideeffects.workspace = true
+netmon.workspace = true
+cbom.workspace = true
+rust-audit.workspace = true
+sysinfo.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Register/approve the privileged capture helper via SMAppService.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-service-management = "0.3"

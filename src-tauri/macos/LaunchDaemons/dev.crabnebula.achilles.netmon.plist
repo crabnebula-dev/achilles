@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Registered by the app via SMAppService.daemon(plistName:). Runs as root
+       so pktap per-app capture works without elevating the app itself. -->
+  <key>Label</key>
+  <string>dev.crabnebula.achilles.netmon</string>
+  <!-- Path is relative to the app bundle; the helper is embedded at
+       Contents/MacOS/achilles-netmon-helper (see packaging). -->
+  <key>BundleProgram</key>
+  <string>Contents/MacOS/achilles-netmon-helper</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- The helper listens on /var/run/dev.crabnebula.achilles.netmon.sock and
+       only captures while the app is connected and has sent a target PID. -->
+  <key>ProcessType</key>
+  <string>Adaptive</string>
+</dict>
+</plist>

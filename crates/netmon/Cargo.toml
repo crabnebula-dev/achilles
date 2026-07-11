@@ -1,0 +1,32 @@
+[package]
+name = "netmon"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Passive network monitor — observe an app's TLS handshakes to inventory cryptography and destinations (feeds the CBOM)."
+
+[dependencies]
+# Cross-platform analysis core (no OS/system-library dependencies).
+cbom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tokio-util.workspace = true
+async-trait.workspace = true
+md-5 = { workspace = true }
+etherparse = { workspace = true }
+sysinfo = { workspace = true }
+
+# Packet capture links against libpcap. Only macOS has a capture backend today
+# (pktap + privileged helper); Linux/Windows capture lands in a later phase and
+# will add pcap (Npcap) to their own target tables + CI deps then. Gating it per
+# OS keeps Linux/Windows builds free of the libpcap/Npcap system dependency.
+[target.'cfg(target_os = "macos")'.dependencies]
+pcap = { workspace = true }
+
+[dev-dependencies]
+etherparse = { workspace = true }

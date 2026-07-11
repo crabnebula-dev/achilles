@@ -9,6 +9,9 @@
 //! and reports an inventory to a collector (see [`reporting`]).
 
 mod commands;
+mod crypto_store;
+#[cfg(target_os = "macos")]
+mod helper_mac;
 mod journal;
 mod reporting;
 
@@ -23,6 +26,21 @@ use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 /// never overlap. Held as Tauri-managed state.
 #[derive(Default)]
 pub struct ReassessGuard(pub tokio::sync::Mutex<()>);
+
+/// An in-progress network-capture session (there is at most one at a time).
+pub struct ActiveCapture {
+    pub meta: netmon::SessionMeta,
+    /// App bundle path, for merging static binary evidence on stop.
+    pub app_path: Option<String>,
+    /// Stopping (or dropping) this ends the OS capture.
+    pub handle: netmon::CaptureHandle,
+    /// The driver task; yields the final report + crypto evidence on stop.
+    pub join: tauri::async_runtime::JoinHandle<(netmon::SessionReport, Vec<cbom::CryptoEvidence>)>,
+}
+
+/// The single active capture session, if any. Held as Tauri-managed state.
+#[derive(Default)]
+pub struct NetmonState(pub tokio::sync::Mutex<Option<ActiveCapture>>);
 
 /// Run one reassessment, skipping if another is already in flight. This is the
 /// single funnel shared by the scheduler, the tray "Reassess now" item, and the
@@ -50,6 +68,7 @@ pub fn run() {
             Some(vec!["--minimized"]),
         ))
         .manage(ReassessGuard::default())
+        .manage(NetmonState::default())
         .setup(|app| {
             setup_tray(app.handle())?;
             reconcile_autostart(app.handle());
@@ -141,6 +160,20 @@ pub fn run() {
             commands::set_reporting_config,
             commands::reporting_config_path,
             commands::refresh_vdb_now,
+            commands::netmon_processes,
+            commands::netmon_capture_available,
+            commands::netmon_start,
+            commands::netmon_stop,
+            commands::netmon_status,
+            commands::export_cbom,
+            commands::crypto_inventory,
+            commands::crypto_load,
+            commands::rust_audit,
+            commands::os_info,
+            commands::open_os_update,
+            commands::helper_status,
+            commands::helper_install,
+            commands::helper_open_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

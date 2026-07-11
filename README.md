@@ -3,8 +3,21 @@
 A desktop app that scans the GUI applications installed on your machine —
 across **macOS, Windows, and Linux** — and tells you which ones ship outdated
 runtimes, weakened process-hardening flags, or known-CVE versions of Electron,
-Tauri, Chromium, Node.js, Flutter, Qt, WebView, and eight other runtimes it
-detects.
+Tauri, Chromium, Node.js, Deno, Flutter, Qt, WebView, and a dozen other
+runtimes it detects.
+
+Beyond version/CVE triage it can also:
+
+- **Inventory an app's cryptography as a CBOM** — record its live TLS traffic
+  and/or statically scan its binaries, then export a standards-based
+  **CycloneDX 1.6 Cryptography Bill of Materials** graded for **post-quantum
+  readiness** (see [Cryptography Bill of Materials](#cryptography-bill-of-materials-cbom)).
+- **Audit bundled Rust crates** against the **RustSec** advisory database, for
+  any binary built with `cargo-auditable`
+  (see [Rust dependency audit](#rust-dependency-audit-cargo-auditable--rustsec)).
+- **Run as a background fleet agent** — periodically re-inventory installed
+  apps and report to a central collector, optionally sourcing vulnerability data
+  from a **trusted-host VDB snapshot** (see [Fleet mode](#fleet-mode-background-reassessment--trusted-host-vdb)).
 
 ## Download the Beta - for Free!!!
 
@@ -73,14 +86,15 @@ deliberately avoids listing the pile of CLI tools a system ships with:
 
 For every discovered app it extracts:
 
-- **Framework**: one of Electron, Tauri, NW.js, Flutter, Qt, React Native,
-  Wails, Sciter, Java, CEF, ChromiumBrowser, or native — with a confidence
-  rating (high/medium/low). Secondary signals (CEF, QtWebEngine Chromium,
-  Hermes, …) are reported alongside the primary verdict, so a Tauri app that
-  *also* bundles CEF shows both.
+- **Framework**: one of Electron, Tauri, Deno, NW.js, Flutter, Qt, React
+  Native, Wails, Sciter, Java, CEF, ChromiumBrowser, or native — with a
+  confidence rating (high/medium/low). Secondary signals (CEF, QtWebEngine
+  Chromium, Hermes, …) are reported alongside the primary verdict, so a Tauri
+  app that *also* bundles CEF shows both — and both get their own CVE lookup
+  (CEF is matched against the embedded Chromium build).
 - **Runtime versions** surfaced: `electron`, `chromium`, `node`, `tauri`,
-  `cef`, `nwjs`, `flutter`, `qt`, `react_native`, `wails`, `sciter`, `java`,
-  `webkit` — pulled from framework Info.plists (macOS), the executable's
+  `deno`, `cef`, `nwjs`, `flutter`, `qt`, `react_native`, `wails`, `sciter`,
+  `java`, `webkit` — pulled from framework Info.plists (macOS), the executable's
   string table (cross-platform: the `Electron/`, `Chrome/`, `node-v`,
   `tauri-X.Y.Z` literals appear verbatim in Mach-O, PE, and ELF alike), the
   binary's import table (which `.dll` / `.so` framework libraries it links),
@@ -190,22 +204,27 @@ For every discovered app it extracts:
                  │
 ┌─ src-tauri/ ───▼─────────────────────┐
 │  Tauri 2 app                         │
-│    commands::discover                │
-│    commands::scan        ──emits──▶  │
-│    commands::detect_one              │
-│    commands::audit                   │
-│    commands::cve_lookup              │
-│    commands::static_scan             │
-│    commands::dependency_scan         │
+│    discover / scan / detect_one      │  detection + audit
+│    audit / static_scan / sideeffects │
+│    cve_lookup / dependency_scan      │  CVEs (streams via Channel)
+│    netmon_start/stop / crypto_*      │  cryptography → CBOM
+│    export_cbom / rust_audit          │
+│    reassess_now / *_reporting_config │  fleet reporting
+│    refresh_vdb_now                   │  trusted-host VDB
+│    os_info / helper_* / journal_*    │  OS badge, capture helper, journal
 └─┬────────────────────────────────────┘
   │
   ├─ crates/detect        framework + version extraction (PE/ELF/Mach-O scan)
   ├─ crates/scan          per-OS discovery + concurrent detect(), streams ScanEvent
-  ├─ crates/cve           EUVD + OSV + NVD + GHSA client with disk cache
+  ├─ crates/cve           EUVD + OSV + NVD + GHSA client + VDB snapshot, disk cache
   ├─ crates/app-audit     per-OS signing / hardening / ASAR integrity
   ├─ crates/static-scan   ASAR reader + oxc AST rule engine (RAST)
-  └─ crates/sideeffects   enumerate out-of-place installs: browser bridges,
-                          launch agents, helpers, log directories
+  ├─ crates/sideeffects   enumerate out-of-place installs: browser bridges,
+  │                       launch agents, helpers, log directories
+  ├─ crates/netmon        passive TLS-handshake capture → crypto evidence
+  ├─ crates/netmon-helper privileged (root) capture daemon, macOS (SMAppService)
+  ├─ crates/cbom          crypto evidence → CycloneDX CBOM + PQC grading
+  └─ crates/rust-audit    cargo-auditable extraction + RustSec advisory match
 ```
 
 Each crate has an `examples/` binary so you can exercise it in isolation.
@@ -251,6 +270,77 @@ cargo run -p static-scan --example static-scan -- \
 
 [Electronegativity]: https://github.com/doyensec/electronegativity
 [oxc]: https://oxc.rs
+
+## Cryptography Bill of Materials (CBOM)
+
+Each app's detail panel has a **Cryptography** section that inventories the
+cryptography an application actually uses and exports it as a
+[**CycloneDX 1.6 CBOM**][cbom] graded for post-quantum readiness (RSA / ECDH /
+ECDSA are NIST quantum-security level 0 — the assets to migrate before a
+quantum adversary arrives). It draws on two evidence sources that fold into one
+inventory (`crates/cbom`):
+
+1. **Observed (runtime)** — a passive **network monitor** (`crates/netmon`)
+   attaches to a running process by PID and records its TLS handshakes:
+   versions, cipher suites (offered + selected), supported groups, signature
+   schemes, SNI, and **JA3/JA4** fingerprints — plus destination routes. No
+   decryption, no MITM: only what's visible in the clear handshake. (TLS 1.3
+   encrypts the certificate, so cert details are surfaced for TLS ≤1.2 only.)
+2. **Static (binary)** — scans the app's binaries for **linked crypto
+   libraries** (BoringSSL / OpenSSL / LibreSSL / libsodium / mbedTLS / … via the
+   import table) and algorithm symbols, catching cryptography a recording never
+   exercised. This needs no privileges and finds e.g. the BoringSSL statically
+   linked inside an Electron/CEF framework binary.
+
+The aggregator normalizes evidence into canonical assets, **decomposes composite
+cipher suites** (TLS → key-exchange + authentication + bulk cipher + hash),
+classifies each asset's NIST quantum level + deprecation, builds the CBOM
+provides/uses dependency graph, and produces a quantum-readiness summary. The
+inventory is retained per app (survives navigation and restarts), and **Export
+CBOM** writes the CycloneDX JSON.
+
+**Capture privileges (macOS).** Per-app packet capture uses the `pktap`
+interface, which requires root. Rather than elevate the app, Achilles installs a
+small **privileged helper** via `SMAppService` — one approval in System
+Settings, no special Apple entitlement, and it ships/updates inside the signed
+`.app`. Without it, capture falls back to the default interface (BPF access) or
+`sudo`. See [`docs/netmon-helper.md`](docs/netmon-helper.md).
+
+## Rust dependency audit (cargo-auditable + RustSec)
+
+The detail panel's **Rust dependencies (RustSec)** section finds Rust binaries
+built with [`cargo-auditable`][cargo-auditable] — which embed their full
+dependency tree in a `.dep-v0` section — anywhere in an app bundle, extracts the
+crate list, and checks every crate against the [**RustSec advisory
+database**][rustsec] (cloned/cached locally). It reports vulnerable and
+unmaintained crates with their advisory id, aliases, CVSS, and patched versions
+(`crates/rust-audit`).
+
+## Fleet mode: background reassessment + trusted-host VDB
+
+Achilles can run unattended as a lightweight fleet agent (**Settings → Fleet
+reporting**, opt-in):
+
+- **Background reassessment** — lives in the system tray (optionally launching
+  at login), and on a schedule re-discovers installed apps and their runtime
+  versions, POSTing an **inventory** (apps + versions + device id + timestamp +
+  fleet id) to a configurable HTTPS **collector** with a bearer token. Client
+  only — the collector is yours; the payload contract is
+  [`docs/collector-schema.md`](docs/collector-schema.md).
+- **Trusted-host VDB snapshots** — instead of each device querying NVD/OSV/EUVD
+  live, it can download a signed-by-trust vulnerability-database **snapshot**
+  from a trusted host and match versions **locally/offline** (falling back to
+  the public sources when a snapshot is missing or a runtime isn't covered).
+  This sidesteps per-device NVD rate limits and keeps queries private. Snapshot
+  format: [`docs/vdb-snapshot-schema.md`](docs/vdb-snapshot-schema.md).
+
+The header also shows an **OS version badge** that flags an out-of-date
+operating system — an outdated OS usually means an outdated system WebView / TLS
+stack — with one click through to the OS update settings.
+
+[cbom]: https://cyclonedx.org/capabilities/cbom/
+[cargo-auditable]: https://github.com/rust-secure-code/cargo-auditable
+[rustsec]: https://github.com/RustSec/advisory-db
 
 ## Known limitations
 
@@ -305,9 +395,11 @@ cargo test --workspace
 
 - **Not a verdict tool.** The output is risk signals, not "this app is
   compromised." A phrase like "unsafe" never appears in the UI on purpose.
-- **No telemetry.** Scanning happens entirely locally. CVE lookups hit OSV
-  directly by version string — nothing about your installed apps is
-  transmitted. This is a design commitment, not just a current gap.
+- **No telemetry by default.** Scanning happens entirely locally and CVE
+  lookups hit the public feeds by version string — nothing about your installed
+  apps leaves the machine. The one exception is **opt-in fleet reporting**
+  (off by default): if *you* enable it and point it at *your own* collector, the
+  app inventory is sent there. There is no vendor telemetry.
 - **Not a replacement for vendor triage.** If an advisory fires on an app
   you care about, read the upstream changelog before concluding anything.
 

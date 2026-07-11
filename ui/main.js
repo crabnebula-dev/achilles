@@ -330,6 +330,24 @@ async function openDetail(det) {
   currentDetail = det;
   detailName.textContent = det.display_name || det.bundle_id || det.path;
 
+  // Restore the last crypto inventory for this app (retained across runs), so
+  // the Cryptography section shows prior results without re-scanning. Only when
+  // idle — never clobber an in-progress recording.
+  {
+    const cst = cryptoFor(det.path);
+    if (cst.status === "idle" && !cst.result) {
+      invoke("crypto_load", { path: det.path, bundleId: det.bundle_id ?? null })
+        .then((inv) => {
+          if (inv && cst.status === "idle") {
+            cst.status = "done";
+            cst.result = { inventory: inv };
+            refreshCrypto(det);
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   // If we've fetched this app before in this session, render from cache
   // first so the panel never flashes blank.
   const prior = detailCache.get(det.path);
@@ -1034,6 +1052,13 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   const sideParts = renderSideEffects(sideeffects);
   if (sideParts) parts.push(sideParts);
 
+  // Cryptography (CBOM): interactive live-capture section, driven by per-path
+  // state so it survives full repaints of the detail pane.
+  parts.push(renderCrypto(det));
+
+  // Rust dependencies (RustSec): on-demand audit of cargo-auditable binaries.
+  parts.push(renderRustAudit(det));
+
   // CVEs last: these lists can run to hundreds of entries, so they live at the
   // bottom of the panel, split across runtime/dependency tabs.
   const cveParts = renderCves(cves, depAdvisories);
@@ -1041,6 +1066,422 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
 
   return parts.join("");
 }
+
+// ---------- network monitor / CBOM ----------------------------------
+//
+// A per-app capture session records TLS handshakes and destinations; on stop
+// the Rust side aggregates a Cryptography Bill of Materials. UI state is kept
+// per detection path so it survives the detail pane's full repaints; live
+// updates only re-render the `#crypto-section` container.
+
+let cryptoCaptureAvailable = false;
+invoke("netmon_capture_available")
+  .then((v) => {
+    cryptoCaptureAvailable = Boolean(v);
+  })
+  .catch(() => {});
+
+// Privileged-helper (macOS) registration status, for the install banner.
+let helperStatus = null;
+async function refreshHelperStatus() {
+  try {
+    helperStatus = await invoke("helper_status");
+  } catch {
+    helperStatus = null;
+  }
+}
+void refreshHelperStatus();
+
+function helperBanner() {
+  if (!cryptoCaptureAvailable || helperStatus === "enabled" || helperStatus === "unsupported") {
+    return "";
+  }
+  if (helperStatus === "requiresApproval") {
+    return `<p class="warn">Capture helper installed — <strong>approve it</strong> in System Settings to enable no-sudo per-app capture. <button type="button" data-crypto="open-helper-settings">Open Settings</button></p>`;
+  }
+  return `<p class="muted">Tip: install the privileged helper for no-sudo, per-app capture. <button type="button" data-crypto="install-helper">Install capture helper</button></p>`;
+}
+
+const cryptoState = new Map();
+function cryptoFor(path) {
+  if (!cryptoState.has(path)) {
+    cryptoState.set(path, {
+      status: "idle", // idle | recording | done
+      processes: null,
+      pid: null,
+      channel: null,
+      dests: new Map(),
+      handshakes: [],
+      counters: null,
+      result: null,
+      error: null,
+      notice: null,
+    });
+  }
+  return cryptoState.get(path);
+}
+
+const cipherName = (id) => "0x" + id.toString(16).padStart(4, "0");
+
+function renderCrypto(det) {
+  return `<h3>Cryptography</h3><div id="crypto-section">${renderCryptoInner(det, cryptoFor(det.path))}</div>`;
+}
+
+function renderCryptoInner(det, st) {
+  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
+  const notice = st.notice ? `<p class="warn">${escapeHtml(st.notice)}</p>` : "";
+
+  if (st.status === "recording") {
+    const c = st.counters || {};
+    const dests = [...st.dests.values()]
+      .map(
+        (d) =>
+          `<tr><td>${escapeHtml(d.hostname || d.sni || d.remoteIp)}</td><td>${d.port}</td><td class="muted">${escapeHtml(d.sni || "—")}</td></tr>`,
+      )
+      .join("");
+    const hs = st.handshakes
+      .map(
+        (h) =>
+          `<div class="advisory"><code>${escapeHtml(h.destination)}</code> ${escapeHtml(
+            h.negotiatedVersion ? "TLS " + h.negotiatedVersion : (h.offeredVersions || []).map((v) => "TLS " + v).join("/") || "TLS",
+          )}${h.cipherSuiteSelected != null ? " · " + cipherName(h.cipherSuiteSelected) : ""}${
+            h.ja3 ? ` · <span class="muted">ja3 ${escapeHtml(h.ja3.slice(0, 12))}</span>` : ""
+          }</div>`,
+      )
+      .join("");
+    return `${err}${notice}<p class="warn">● recording — ${c.handshakes || 0} handshake(s), ${
+      c.flows || 0
+    } flow(s). Use the app to generate traffic. <button type="button" data-crypto="stop">Stop &amp; build CBOM</button></p>
+      ${dests ? `<table class="crypto-dests"><thead><tr><th>host</th><th>port</th><th>sni</th></tr></thead><tbody>${dests}</tbody></table>` : `<p class="muted">waiting for connections…</p>`}
+      ${hs}`;
+  }
+
+  if (st.status === "done" && st.result) {
+    return (
+      renderCbom(st.result) +
+      `<p><button type="button" data-crypto="export">Export CBOM (CycloneDX)</button>
+        <button type="button" data-crypto="reset">New scan</button></p>`
+    );
+  }
+
+  // idle
+  const staticBtn = `<p class="muted"><button type="button" data-crypto="static-scan">Inventory crypto from binaries (no capture)</button> — reads linked crypto libraries &amp; algorithm symbols; no privileges needed.</p>`;
+  const noticeP = st.notice ? `<p class="muted">${escapeHtml(st.notice)}</p>` : "";
+  if (!cryptoCaptureAvailable) {
+    return `${err}${noticeP}<p class="muted">Live traffic capture isn't available on this platform. You can still inventory cryptography from the app's binaries.</p>${staticBtn}`;
+  }
+  const procs = st.processes;
+  if (!procs) {
+    return `${err}${noticeP}${helperBanner()}<p class="muted">Record the selected running process's TLS traffic to inventory its cryptography (algorithms, protocols, key exchange, certificates) and destinations, then export a CycloneDX CBOM. Requires capture privileges.</p>
+      <p><button type="button" data-crypto="load-procs">Choose a running process…</button></p>
+      ${staticBtn}`;
+  }
+  const options = procs
+    .map(
+      (p) =>
+        `<option value="${p.pid}"${st.pid === p.pid ? " selected" : ""}>${escapeHtml(p.name)} (pid ${p.pid})</option>`,
+    )
+    .join("");
+  return `${err}${noticeP}<p><select data-crypto="pick"><option value="">— choose a running process —</option>${options}</select>
+      <button type="button" data-crypto="record"${st.pid ? "" : " disabled"}>Record</button>
+      <button type="button" data-crypto="refresh-procs" title="reload process list">↻</button></p>
+      ${staticBtn}`;
+}
+
+function renderCbom(result) {
+  const inv = result.inventory || {};
+  const assets = inv.assets || [];
+  const r = inv.readiness || {};
+  const gradeCls = { vulnerable: "bad", "at-risk": "warn", ok: "ok" }[r.grade] || "muted";
+  const groups = { protocol: [], algorithm: [], certificate: [], library: [] };
+  for (const a of assets) (groups[a.assetType] || groups.algorithm).push(a);
+
+  const qbadge = (a) => {
+    const m = {
+      quantumVulnerable: ["bad", "quantum-vulnerable"],
+      classicallyBroken: ["bad", "broken"],
+      weak: ["warn", "weak"],
+      acceptable: ["muted", "ok"],
+      strong: ["ok", "strong"],
+      postQuantum: ["ok", "PQC"],
+    }[a.assessment];
+    return m ? ` <span class="${m[0]}">[${m[1]}]</span>` : "";
+  };
+  const staticOnly = (a) =>
+    (a.provenance || []).includes("staticBinary") && !(a.provenance || []).includes("observedRuntime")
+      ? ' <span class="muted">(static)</span>'
+      : "";
+  const li = (a) =>
+    `<li>${escapeHtml(a.name)}${qbadge(a)}${a.parameter ? ` <span class="muted">${escapeHtml(a.parameter)}</span>` : ""}${staticOnly(a)}</li>`;
+  const section = (title, arr) =>
+    arr.length ? `<p style="margin:8px 0 2px;color:var(--fg-2)">${title}</p><ul style="margin:0;padding-left:18px">${arr.map(li).join("")}</ul>` : "";
+
+  return `<p>Quantum readiness: <strong class="${gradeCls}">${escapeHtml(r.grade || "—")}</strong>
+      <span class="muted">— ${r.quantumVulnerable || 0} quantum-vulnerable · ${r.classicallyBroken || 0} broken · ${r.weak || 0} weak · ${r.postQuantum || 0} PQC of ${r.totalAssets ?? assets.length}</span></p>
+    ${section("Protocols", groups.protocol)}
+    ${section("Algorithms & key exchange", groups.algorithm)}
+    ${section("Certificates", groups.certificate)}
+    ${section("Crypto libraries", groups.library)}`;
+}
+
+function refreshCrypto(det) {
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#crypto-section");
+  if (el) el.innerHTML = renderCryptoInner(det, cryptoFor(det.path));
+}
+
+function guessProcess(procs, det) {
+  const name = (det.display_name || "").toLowerCase();
+  const exe = (det.executable || "").toLowerCase();
+  return (
+    (exe && procs.find((p) => (p.exePath || "").toLowerCase() === exe)) ||
+    (name && procs.find((p) => p.name.toLowerCase() === name)) ||
+    (name && procs.find((p) => p.name.toLowerCase().includes(name))) ||
+    null
+  );
+}
+
+async function startRecording(det, st) {
+  st.status = "recording";
+  st.error = null;
+  st.notice = null;
+  st.dests = new Map();
+  st.handshakes = [];
+  st.counters = null;
+  st.result = null;
+  refreshCrypto(det);
+
+  const channel = new Channel();
+  channel.onmessage = (delta) => {
+    // Always accumulate into this app's state — even while you're looking at
+    // another app — so nothing is lost. `refreshCrypto` only touches the DOM
+    // when this app's pane is the visible one.
+    switch (delta.type) {
+      case "destination":
+        st.dests.set(`${delta.remoteIp}:${delta.port}`, delta);
+        break;
+      case "handshake": {
+        const i = st.handshakes.findIndex((h) => h.destination === delta.destination);
+        if (i >= 0) st.handshakes[i] = delta;
+        else st.handshakes.push(delta);
+        break;
+      }
+      case "counters":
+        st.counters = delta;
+        break;
+      case "warning":
+        // Non-fatal (e.g. host-wide fallback / privilege guidance) — keep recording.
+        st.notice = delta.message;
+        break;
+    }
+    refreshCrypto(det);
+  };
+  st.channel = channel;
+
+  try {
+    await invoke("netmon_start", {
+      pid: st.pid,
+      includeChildren: true,
+      displayName: det.display_name ?? null,
+      bundleId: det.bundle_id ?? null,
+      exePath: det.executable ?? null,
+      appPath: det.path ?? null,
+      onEvent: channel,
+    });
+  } catch (err) {
+    st.status = "idle";
+    st.error = String(err);
+    st.channel = null;
+    refreshCrypto(det);
+  }
+}
+
+async function stopRecording(det, st) {
+  try {
+    st.result = await invoke("netmon_stop");
+    st.status = "done";
+  } catch (err) {
+    st.status = "idle";
+    st.error = String(err);
+  }
+  st.channel = null;
+  refreshCrypto(det);
+}
+
+async function exportCbom(det, st) {
+  if (!st.result) return;
+  try {
+    const json = await invoke("export_cbom", { inventory: st.result.inventory });
+    const base = (det.display_name || det.bundle_id || "app").replace(/[^\w.-]+/g, "_");
+    const path = await save({
+      defaultPath: `${base}.cbom.json`,
+      filters: [{ name: "CycloneDX CBOM", extensions: ["json"] }],
+    });
+    if (path) {
+      await writeTextFile(path, json);
+      setStatus("CBOM exported");
+    }
+  } catch (err) {
+    st.error = String(err);
+    refreshCrypto(det);
+  }
+}
+
+// ---------- rust-audit (cargo-auditable + RustSec) ------------------
+
+const rustAuditState = new Map();
+function rustAuditFor(path) {
+  if (!rustAuditState.has(path)) {
+    rustAuditState.set(path, { status: "idle", report: null, error: null });
+  }
+  return rustAuditState.get(path);
+}
+
+function renderRustAudit(det) {
+  return `<h3>Rust dependencies (RustSec)</h3><div id="rustaudit-section">${renderRustAuditInner(det, rustAuditFor(det.path))}</div>`;
+}
+
+function renderRustAuditInner(det, st) {
+  if (st.status === "running") {
+    return `<p class="muted">auditing… (first run clones the RustSec advisory database)</p>`;
+  }
+  if (st.status === "done" && st.report) {
+    return renderRustReport(st.report);
+  }
+  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
+  return `${err}<p class="muted">Find <code>cargo-auditable</code> Rust binaries in this app and check their embedded crates against the RustSec advisory database. <button type="button" data-rustaudit="run">Audit Rust binaries</button></p>`;
+}
+
+function renderRustReport(r) {
+  if (r.dbError) {
+    return `<p class="warn">advisory database unavailable: ${escapeHtml(r.dbError)}</p><p><button type="button" data-rustaudit="run">Re-run</button></p>`;
+  }
+  const bins = r.auditableBinaries || [];
+  if (!bins.length) {
+    return `<p class="ok">No <code>cargo-auditable</code> Rust binaries found in this app.</p><p><button type="button" data-rustaudit="run">Re-run</button></p>`;
+  }
+  const crates = bins.reduce((a, b) => a + (b.crateCount || 0), 0);
+  const summary = `<p class="muted">${bins.length} auditable binar${bins.length === 1 ? "y" : "ies"} · ${crates} crate${crates === 1 ? "" : "s"}</p>`;
+  const findings = r.findings || [];
+  if (!findings.length) {
+    return `${summary}<p class="ok">No known RustSec advisories.</p><p><button type="button" data-rustaudit="run">Re-run</button></p>`;
+  }
+  const items = findings
+    .map(
+      (f) =>
+        `<div class="advisory ${f.informational ? "" : "bad"}">
+          <strong>${escapeHtml(f.id)}</strong>
+          <code>${escapeHtml(f.crateName)} ${escapeHtml(f.version)}</code>
+          ${f.informational ? `<span class="muted">[${escapeHtml(f.informational)}]</span>` : ""}
+          ${f.cvss ? `<span class="muted">${escapeHtml(f.cvss)}</span>` : ""}
+          ${f.aliases?.length ? `<span class="muted">${escapeHtml(f.aliases.join(", "))}</span>` : ""}
+          <br>${escapeHtml(f.title)}
+          ${f.patched?.length ? `<br><span class="muted">patched: ${escapeHtml(f.patched.join(", "))}</span>` : ""}
+        </div>`,
+    )
+    .join("");
+  return `${summary}${items}<p><button type="button" data-rustaudit="run">Re-run</button></p>`;
+}
+
+function refreshRustAudit(det) {
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#rustaudit-section");
+  if (el) el.innerHTML = renderRustAuditInner(det, rustAuditFor(det.path));
+}
+
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-rustaudit]");
+  if (!btn || !currentDetail) return;
+  const det = currentDetail;
+  const st = rustAuditFor(det.path);
+  st.status = "running";
+  st.error = null;
+  refreshRustAudit(det);
+  invoke("rust_audit", { path: det.path, executable: det.executable ?? null })
+    .then((rep) => {
+      st.report = rep;
+      st.status = "done";
+    })
+    .catch((err) => {
+      st.error = String(err);
+      st.status = "idle";
+    })
+    .finally(() => refreshRustAudit(det));
+});
+
+// Delegated handlers (attached once; survive detail-pane innerHTML swaps).
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-crypto]");
+  if (!btn || btn.tagName === "SELECT" || !currentDetail) return;
+  const det = currentDetail;
+  const st = cryptoFor(det.path);
+  const action = btn.getAttribute("data-crypto");
+  if (action === "load-procs" || action === "refresh-procs") {
+    st.processes = st.processes || [];
+    st.error = null;
+    refreshCrypto(det);
+    invoke("netmon_processes")
+      .then((procs) => {
+        st.processes = procs;
+        if (!st.pid) {
+          const guess = guessProcess(procs, det);
+          if (guess) st.pid = guess.pid;
+        }
+      })
+      .catch((err) => {
+        st.error = String(err);
+      })
+      .finally(() => refreshCrypto(det));
+  } else if (action === "record") {
+    if (st.pid) void startRecording(det, st);
+  } else if (action === "stop") {
+    void stopRecording(det, st);
+  } else if (action === "export") {
+    void exportCbom(det, st);
+  } else if (action === "static-scan") {
+    st.error = null;
+    st.notice = "scanning binaries…";
+    refreshCrypto(det);
+    invoke("crypto_inventory", {
+      path: det.path,
+      executable: det.executable ?? null,
+      displayName: det.display_name ?? null,
+      bundleId: det.bundle_id ?? null,
+    })
+      .then((inv) => {
+        st.result = { inventory: inv };
+        st.status = "done";
+        st.notice = null;
+      })
+      .catch((err) => {
+        st.error = String(err);
+        st.notice = null;
+      })
+      .finally(() => refreshCrypto(det));
+  } else if (action === "install-helper") {
+    invoke("helper_install")
+      .catch((err) => {
+        st.error = String(err);
+      })
+      .finally(() => refreshHelperStatus().then(() => refreshCrypto(det)));
+  } else if (action === "open-helper-settings") {
+    void invoke("helper_open_settings").catch(() => {});
+  } else if (action === "reset") {
+    st.status = "idle";
+    st.result = null;
+    st.error = null;
+    st.notice = null;
+    refreshCrypto(det);
+  }
+});
+
+detailBody.addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-crypto='pick']");
+  if (!sel || !currentDetail) return;
+  const st = cryptoFor(currentDetail.path);
+  st.pid = sel.value ? Number(sel.value) : null;
+  refreshCrypto(currentDetail);
+});
 
 closeDetailBtn.addEventListener("click", () => {
   detailPanel.hidden = true;
@@ -1530,3 +1971,25 @@ buildHeader();
 startScan();
 void checkForUpdates();
 void refreshNvdKeyState();
+
+// Custom window controls for the frameless title bar.
+const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
+if (appWindow) {
+  document.querySelector("#win-close")?.addEventListener("click", () => void appWindow.close());
+  document.querySelector("#win-min")?.addEventListener("click", () => void appWindow.minimize());
+  document.querySelector("#win-max")?.addEventListener("click", () => void appWindow.toggleMaximize());
+}
+
+// OS version badge in the header (with an update nudge when out of date).
+const osBadge = document.querySelector("#os-badge");
+osBadge?.addEventListener("click", () => void invoke("open_os_update").catch(() => {}));
+invoke("os_info")
+  .then((info) => {
+    if (!info || !osBadge) return;
+    const label = info.display || `${info.os} ${info.version ?? ""}`.trim();
+    osBadge.textContent = (info.outdated ? "⚠ " : "") + label;
+    osBadge.title = info.note || label;
+    osBadge.classList.toggle("os-alert", Boolean(info.outdated));
+    osBadge.hidden = false;
+  })
+  .catch(() => {});
