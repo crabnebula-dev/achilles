@@ -1,0 +1,17 @@
+[package]
+name = "netmon-helper"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Achilles privileged capture helper — a root LaunchDaemon (macOS) that captures via pktap and streams events to the app over a local socket."
+
+[[bin]]
+name = "achilles-netmon-helper"
+path = "src/main.rs"
+
+[dependencies]
+netmon.workspace = true
+tokio = { workspace = true }

@@ -235,6 +235,333 @@ pub async fn refresh_vdb_now(app: AppHandle) -> Result<(), String> {
     crate::reporting::refresh_vdb_snapshot(app).await
 }
 
+// ---------- network monitor / CBOM -----------------------------------
+
+/// A finished capture: the traffic report plus the aggregated crypto inventory.
+#[derive(Debug, Clone, Serialize)]
+pub struct CbomResult {
+    pub report: netmon::SessionReport,
+    pub inventory: cbom::CryptoInventory,
+}
+
+/// List running processes so the user can pick a capture target.
+#[tauri::command]
+pub async fn netmon_processes() -> Result<Vec<netmon::RunningProcess>, String> {
+    Ok(netmon::list_processes())
+}
+
+/// Whether this build/platform can capture packets (the UI disables Record if not).
+#[tauri::command]
+pub async fn netmon_capture_available() -> bool {
+    netmon::capture_available()
+}
+
+/// Start a passive capture of `pid`'s traffic. Live observations stream over
+/// `on_event`; the session runs until [`netmon_stop`]. Only one at a time.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // flat args mirror the frontend invoke
+pub async fn netmon_start(
+    state: tauri::State<'_, crate::NetmonState>,
+    pid: u32,
+    include_children: Option<bool>,
+    display_name: Option<String>,
+    bundle_id: Option<String>,
+    exe_path: Option<String>,
+    app_path: Option<String>,
+    on_event: tauri::ipc::Channel<netmon::SessionDelta>,
+) -> Result<netmon::SessionMeta, String> {
+    let mut guard = state.0.lock().await;
+    if guard.is_some() {
+        return Err("a capture is already running".into());
+    }
+
+    let source = netmon::default_source().map_err(|e| e.to_string())?;
+    let backend_id = source.backend_id().to_string();
+    let filter = netmon::PidFilter {
+        root_pid: pid,
+        include_children: include_children.unwrap_or(true),
+    };
+    let (mut rx, handle) = source.start(filter).await.map_err(|e| e.to_string())?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let target = netmon::TargetProcess {
+        pid,
+        exe_path,
+        display_name,
+        bundle_id,
+    };
+    let meta = netmon::SessionMeta {
+        session_id: session_id.clone(),
+        target: target.clone(),
+        backend_id: backend_id.clone(),
+        started_at: now,
+    };
+
+    let mut session = netmon::Session::new(session_id, target, backend_id, now);
+    let join = tauri::async_runtime::spawn(async move {
+        // The loop ends when the capture stops (its sender is dropped).
+        while let Some(ev) = rx.recv().await {
+            let deltas = session.ingest(ev);
+            if !deltas.is_empty() {
+                for delta in deltas {
+                    let _ = on_event.send(delta);
+                }
+                let _ = on_event.send(session.counters());
+            }
+        }
+        let evidence = session.crypto_evidence();
+        (session.finish(), evidence)
+    });
+
+    *guard = Some(crate::ActiveCapture {
+        meta: meta.clone(),
+        app_path,
+        handle,
+        join,
+    });
+    Ok(meta)
+}
+
+/// Stop the active capture, aggregate the CBOM, persist to the journal, and
+/// return the report + inventory.
+#[tauri::command]
+pub async fn netmon_stop(
+    state: tauri::State<'_, crate::NetmonState>,
+) -> Result<CbomResult, String> {
+    let active = state.0.lock().await.take().ok_or("no capture is running")?;
+    active.handle.stop();
+    let (report, mut evidence) = active.join.await.map_err(|e| e.to_string())?;
+
+    let target = &active.meta.target;
+    // Merge static binary crypto evidence with the observed (runtime) evidence
+    // so the CBOM covers cryptography the recording didn't exercise.
+    if let Some(exe) = target.exe_path.clone() {
+        let root = active.app_path.clone();
+        let static_ev = tokio::task::spawn_blocking(move || {
+            cbom::static_evidence(std::path::Path::new(&exe), root.as_deref().map(std::path::Path::new))
+        })
+        .await
+        .unwrap_or_default();
+        evidence.extend(static_ev);
+    }
+
+    let app_ref = cbom::AppRef {
+        name: target.display_name.clone().unwrap_or_else(|| "application".into()),
+        version: None,
+        bundle_id: target.bundle_id.clone(),
+        path: active.app_path.clone().or_else(|| target.exe_path.clone()),
+    };
+    let inventory = cbom::build_inventory(app_ref, &evidence);
+
+    // Retain the inventory for this app (survives navigation + restarts).
+    let store_path = active
+        .app_path
+        .clone()
+        .or_else(|| target.exe_path.clone())
+        .unwrap_or_default();
+    crate::crypto_store::save(&store_path, target.bundle_id.as_deref(), &inventory);
+
+    // Persist alongside the app's other results in the journal.
+    let payload = serde_json::json!({ "netmon": &report, "cbom": &inventory });
+    let _ = crate::journal::save(crate::journal::SaveInput {
+        app_path: target
+            .exe_path
+            .clone()
+            .or_else(|| target.bundle_id.clone())
+            .unwrap_or_else(|| "netmon".into()),
+        display_name: target.display_name.clone(),
+        bundle_id: target.bundle_id.clone(),
+        payload,
+    });
+
+    Ok(CbomResult { report, inventory })
+}
+
+/// Metadata of the running capture, if any.
+#[tauri::command]
+pub async fn netmon_status(
+    state: tauri::State<'_, crate::NetmonState>,
+) -> Result<Option<netmon::SessionMeta>, String> {
+    Ok(state.0.lock().await.as_ref().map(|a| a.meta.clone()))
+}
+
+/// Serialize a crypto inventory to a CycloneDX 1.6 CBOM JSON string (the UI
+/// writes it to disk via the file dialog).
+#[tauri::command]
+pub async fn export_cbom(inventory: cbom::CryptoInventory) -> Result<String, String> {
+    serde_json::to_string_pretty(&cbom::to_cyclonedx(&inventory)).map_err(|e| e.to_string())
+}
+
+/// Static-only CBOM: inventory an app's cryptography from its binaries without
+/// recording traffic (linked crypto libraries + algorithm symbols).
+#[tauri::command]
+pub async fn crypto_inventory(
+    path: PathBuf,
+    executable: Option<PathBuf>,
+    display_name: Option<String>,
+    bundle_id: Option<String>,
+) -> Result<cbom::CryptoInventory, String> {
+    tokio::task::spawn_blocking(move || {
+        let exe = executable.unwrap_or_else(|| path.clone());
+        let evidence = cbom::static_evidence(&exe, Some(&path));
+        let path_str = path.to_string_lossy().into_owned();
+        let app = cbom::AppRef {
+            name: display_name.unwrap_or_else(|| "application".into()),
+            version: None,
+            bundle_id: bundle_id.clone(),
+            path: Some(path_str.clone()),
+        };
+        let inventory = cbom::build_inventory(app, &evidence);
+        crate::crypto_store::save(&path_str, bundle_id.as_deref(), &inventory);
+        inventory
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Load the last persisted crypto inventory for an app (retained across runs).
+#[tauri::command]
+pub async fn crypto_load(
+    path: String,
+    bundle_id: Option<String>,
+) -> Option<cbom::CryptoInventory> {
+    crate::crypto_store::load(&path, bundle_id.as_deref())
+}
+
+// ---------- operating system version + update ------------------------
+
+/// Operating-system name/version for the header badge, with a best-effort
+/// "outdated" flag so the UI can nudge the user to update (an out-of-date OS
+/// usually means an out-of-date system WebView / TLS stack).
+#[derive(Debug, Clone, Serialize)]
+pub struct OsInfo {
+    pub os: String,
+    pub display: String,
+    pub version: Option<String>,
+    pub outdated: bool,
+    pub note: Option<String>,
+}
+
+#[tauri::command]
+pub async fn os_info() -> OsInfo {
+    let os = std::env::consts::OS.to_string();
+    let version = sysinfo::System::os_version();
+    let display = sysinfo::System::long_os_version()
+        .unwrap_or_else(|| format!("{os} {}", version.clone().unwrap_or_default()));
+
+    // Conservative, easily-updated minimums. Below → nudge to update.
+    let major = version
+        .as_deref()
+        .and_then(|v| v.split(['.', '-']).next())
+        .and_then(|m| m.parse::<u32>().ok());
+    let (outdated, note) = match os.as_str() {
+        "macos" => match major {
+            Some(m) if m < 14 => (
+                true,
+                Some("macOS is out of date — update for the latest Safari/WebKit security fixes.".into()),
+            ),
+            _ => (false, None),
+        },
+        "windows" => match major {
+            Some(m) if m < 10 => (true, Some("Windows is out of date — update for current security fixes.".into())),
+            _ => (false, None),
+        },
+        _ => (false, None),
+    };
+
+    OsInfo {
+        os,
+        display,
+        version,
+        outdated,
+        note,
+    }
+}
+
+/// Open the OS software-update settings.
+#[tauri::command]
+pub async fn open_os_update() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let spawn = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let spawn = std::process::Command::new("cmd")
+        .args(["/c", "start", "ms-settings:windowsupdate"])
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let spawn = std::process::Command::new("xdg-open")
+        .arg("gnome-control-center")
+        .spawn();
+
+    spawn.map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---------- rust-audit (cargo-auditable + RustSec) -------------------
+
+/// Find cargo-auditable Rust binaries in an app and audit their embedded crate
+/// dependencies against the RustSec advisory database. Heavy (mmap scan + first
+/// run clones the advisory-db), so it runs on a blocking thread.
+#[tauri::command]
+pub async fn rust_audit(
+    path: PathBuf,
+    executable: Option<PathBuf>,
+) -> Result<rust_audit::RustAuditReport, String> {
+    tokio::task::spawn_blocking(move || {
+        let exe = executable.unwrap_or_else(|| path.clone());
+        rust_audit::audit(&exe, Some(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+// ---------- privileged capture helper (macOS) ------------------------
+
+/// SMAppService registration status: `enabled` | `requiresApproval` |
+/// `notRegistered` | `notFound` | `unknown` | `unsupported`.
+#[tauri::command]
+pub async fn helper_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        crate::helper_mac::status_str().to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unsupported".to_string()
+    }
+}
+
+/// Register the privileged capture helper (prompts for approval on first use).
+#[tauri::command]
+pub async fn helper_install() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::helper_mac::install()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("the capture helper is only available on macOS".into())
+    }
+}
+
+/// Open System Settings → Login Items & Extensions so the user can approve it.
+#[tauri::command]
+pub async fn helper_open_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::helper_mac::open_login_items();
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("unsupported".into())
+    }
+}
+
 // ---------- journal --------------------------------------------------
 
 /// Arguments for `journal_save`. The payload is frontend-assembled and kept

@@ -1,0 +1,20 @@
+[package]
+name = "cbom"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cryptography Bill of Materials — aggregate crypto evidence into a CycloneDX 1.6 CBOM with NIST quantum-readiness grading."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Static binary crypto evidence: linked-library imports (goblin) + string/symbol
+# scanning (mmap + memchr) + version-banner extraction (regex).
+goblin.workspace = true
+memmap2.workspace = true
+aho-corasick.workspace = true
+regex.workspace = true

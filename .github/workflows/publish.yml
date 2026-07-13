@@ -123,6 +123,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # Build the privileged capture helper for this macOS target and stage it
+      # as the Tauri sidecar so it's embedded in Contents/MacOS and signed as
+      # part of the app bundle (same Developer ID → SMAppService accepts it).
+      - name: build & stage netmon helper (macOS)
+        if: startsWith(matrix.os,'macos')
+        run: |
+          cargo build -p netmon-helper --release --target ${{ matrix.target }}
+          mkdir -p src-tauri/binaries
+          cp "target/${{ matrix.target }}/release/achilles-netmon-helper" \
+             "src-tauri/binaries/achilles-netmon-helper"
+        shell: bash
+
       - name: build Tauri app for macOS
         if: startsWith(matrix.os,'macos')
         run: cargo tauri build --target ${{ matrix.target }}

@@ -7,9 +7,16 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header>
-    <h1>Achilles</h1>
-    <div id="status">idle</div>
+  <div id="app">
+  <header data-tauri-drag-region>
+    <div id="window-controls" aria-label="Window controls">
+      <button id="win-close" type="button" title="Close"></button>
+      <button id="win-min" type="button" title="Minimize"></button>
+      <button id="win-max" type="button" title="Zoom"></button>
+    </div>
+    <h1 data-tauri-drag-region>Achilles</h1>
+    <button id="os-badge" type="button" hidden title="Operating system"></button>
+    <div id="status" data-tauri-drag-region>idle</div>
     <button id="export-all" type="button" title="Export every row (and any detail you've opened) as JSON">Export JSON</button>
     <button id="settings" type="button" title="CVE source settings">Settings</button>
     <button id="rescan" type="button">Rescan</button>
@@ -184,6 +191,7 @@
       <div id="detail-body"></div>
     </section>
   </main>
+  </div>
 
   <script type="module" src="./main.js"></script>
 </body>
