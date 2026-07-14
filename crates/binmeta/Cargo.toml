@@ -1,0 +1,15 @@
+[package]
+name = "binmeta"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Inspect the object-file headers (Mach-O / ELF / PE) of an app's binaries as structured, inspectable metadata."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+goblin.workspace = true
+memmap2.workspace = true

@@ -168,6 +168,8 @@ pub fn run() {
             commands::export_cbom,
             commands::crypto_inventory,
             commands::crypto_load,
+            commands::binary_headers,
+            commands::library_cves,
             commands::rust_audit,
             commands::os_info,
             commands::open_os_update,

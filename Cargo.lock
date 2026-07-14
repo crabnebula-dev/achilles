@@ -7,6 +7,7 @@ name = "achilles"
 version = "0.1.0"
 dependencies = [
  "app-audit",
+ "binmeta",
  "cbom",
  "cve",
  "detect",
@@ -210,6 +211,16 @@ name = "binfarce"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "18464ccbb85e5dede30d70cc7676dc9950a0fb7dbf595a43d765be9123c616a2"
+
+[[package]]
+name = "binmeta"
+version = "0.1.0"
+dependencies = [
+ "goblin",
+ "memmap2",
+ "serde",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "bit-set"

@@ -189,6 +189,27 @@ impl Client_ {
         Self { http, settings }
     }
 
+    /// Look up NVD advisories for a single native library by CPE
+    /// (`vendor`/`product`/`version`). Used for linked-library vulnerability
+    /// checks where we already have a confident (vendor, product) mapping and an
+    /// accurate version banner. Returns an empty vec when NVD is disabled in
+    /// settings or the lookup fails transiently — callers treat "no data" and
+    /// "no vulnerabilities" the same for a single library.
+    pub async fn lookup_cpe(&self, vendor: &str, product: &str, version: &str) -> Vec<Advisory> {
+        if !self.settings.sources.nvd.enabled {
+            return Vec::new();
+        }
+        sources::nvd::lookup_cpe_with_key(
+            &self.http,
+            vendor,
+            product,
+            version,
+            self.settings.sources.nvd.api_key.as_deref(),
+        )
+        .await
+        .unwrap_or_default()
+    }
+
     /// Build a full [`CveReport`] for a set of detected versions. Each
     /// enabled source runs independently — a single failure goes into
     /// `errors` and the report still returns. Sources disabled in settings

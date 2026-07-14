@@ -77,3 +77,4 @@ sideeffects = { path = "crates/sideeffects" }
 cbom = { path = "crates/cbom" }
 netmon = { path = "crates/netmon" }
 rust-audit = { path = "crates/rust-audit" }
+binmeta = { path = "crates/binmeta" }

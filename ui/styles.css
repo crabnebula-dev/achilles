@@ -476,6 +476,23 @@ dialog::backdrop {
   padding-left: 18px;
 }
 
+.binmeta-list {
+  margin: 3px 0;
+}
+.binmeta-list > summary {
+  cursor: pointer;
+}
+.binmeta-list ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  max-height: 340px;
+  overflow: auto;
+}
+.binmeta-list li {
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 #detail-body .advisory {
   margin: 4px 0;
   padding: 6px 8px;

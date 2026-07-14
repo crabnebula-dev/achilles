@@ -432,6 +432,104 @@ pub async fn crypto_load(
     crate::crypto_store::load(&path, bundle_id.as_deref())
 }
 
+// ---------- binary header inspection ---------------------------------
+
+/// Inspect the object-file headers (Mach-O / ELF / PE) of an app's primary
+/// executable — format, architectures, file kind, header flags (PIE/NX/ASLR/…),
+/// linked libraries, and segments/sections.
+#[tauri::command]
+pub async fn binary_headers(
+    path: PathBuf,
+    executable: Option<PathBuf>,
+) -> Result<binmeta::BinaryMeta, String> {
+    tokio::task::spawn_blocking(move || {
+        let exe = executable.unwrap_or(path);
+        binmeta::inspect(&exe).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------- linked-library vulnerabilities ---------------------------
+
+/// Map a detected native-crypto library name → its NVD CPE `(vendor, product)`.
+///
+/// Deliberately limited to libraries where the name→CPE mapping is unambiguous
+/// and the static scanner recovers an accurate upstream version banner. Apple
+/// system dylibs (`libSystem`, `CommonCrypto`) carry OS build numbers that do
+/// not map to CPEs, so they are intentionally absent — matching them would
+/// produce noise, not findings.
+fn library_cpe(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "OpenSSL" => Some(("openssl", "openssl")),
+        "LibreSSL" => Some(("openbsd", "libressl")),
+        "GnuTLS" => Some(("gnu", "gnutls")),
+        "wolfSSL" => Some(("wolfssl", "wolfssl")),
+        "libsodium" => Some(("libsodium_project", "libsodium")),
+        "mbedTLS" => Some(("arm", "mbed_tls")),
+        "libgcrypt" => Some(("gnupg", "libgcrypt")),
+        "nss" | "NSS" => Some(("mozilla", "nss")),
+        _ => None,
+    }
+}
+
+/// One linked library and the advisories affecting its detected version.
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryCves {
+    pub library: String,
+    pub version: String,
+    pub advisories: Vec<cve::Advisory>,
+}
+
+/// Detect known native crypto libraries linked into an app (with their versions)
+/// and look each up against NVD by CPE. Reuses the static crypto scanner, whose
+/// banner-based version detection (e.g. `"OpenSSL 3.3.1"`) is more reliable for
+/// CVE matching than a Mach-O `current_version`. Only libraries with a confident
+/// CPE mapping *and* a detected version are queried; results with no advisories
+/// are omitted so the UI shows only actionable findings.
+#[tauri::command]
+pub async fn library_cves(
+    path: PathBuf,
+    executable: Option<PathBuf>,
+) -> Result<Vec<LibraryCves>, String> {
+    let root = path.clone();
+    let exe = executable.unwrap_or(path);
+    let evidence = tokio::task::spawn_blocking(move || cbom::static_evidence(&exe, Some(&root)))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Collect unique (name, version, vendor, product) targets from the evidence.
+    let mut targets: Vec<(String, String, &'static str, &'static str)> = Vec::new();
+    for ev in &evidence {
+        if let cbom::CryptoEvidence::Library {
+            name,
+            version: Some(version),
+            ..
+        } = ev
+        {
+            if let Some((vendor, product)) = library_cpe(name) {
+                if !targets.iter().any(|(n, v, ..)| n == name && v == version) {
+                    targets.push((name.clone(), version.clone(), vendor, product));
+                }
+            }
+        }
+    }
+
+    let client = cve::OsvClient::new();
+    let mut out = Vec::new();
+    for (library, version, vendor, product) in targets {
+        let advisories = client.lookup_cpe(vendor, product, &version).await;
+        if !advisories.is_empty() {
+            out.push(LibraryCves {
+                library,
+                version,
+                advisories,
+            });
+        }
+    }
+    Ok(out)
+}
+
 // ---------- operating system version + update ------------------------
 
 /// Operating-system name/version for the header badge, with a best-effort

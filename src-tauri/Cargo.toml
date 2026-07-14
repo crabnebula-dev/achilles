@@ -39,6 +39,7 @@ sideeffects.workspace = true
 netmon.workspace = true
 cbom.workspace = true
 rust-audit.workspace = true
+binmeta.workspace = true
 sysinfo.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

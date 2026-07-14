@@ -330,6 +330,9 @@ async function openDetail(det) {
   currentDetail = det;
   detailName.textContent = det.display_name || det.bundle_id || det.path;
 
+  // Inspect the app's binary headers (fast; auto-loads into its section).
+  loadBinMeta(det);
+
   // Restore the last crypto inventory for this app (retained across runs), so
   // the Cryptography section shows prior results without re-scanning. Only when
   // idle — never clobber an in-progress recording.
@@ -1039,6 +1042,12 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
     ${versionRows}
   </dl>`);
 
+  // Binary headers (goblin) — auto-loaded on open via loadBinMeta().
+  parts.push(renderBinMeta(det));
+
+  // Linked-library vulnerabilities (on-demand NVD lookup by CPE).
+  parts.push(renderLibCve(det));
+
   if (audit && !audit.error) {
     // The audit payload is platform-tagged (`platform`: macos | windows | linux).
     parts.push(...renderAudit(audit));
@@ -1388,6 +1397,153 @@ function refreshRustAudit(det) {
   const el = document.querySelector("#rustaudit-section");
   if (el) el.innerHTML = renderRustAuditInner(det, rustAuditFor(det.path));
 }
+
+// ---------- binary headers (goblin) ----------------------------------
+
+const binMetaState = new Map();
+function binMetaFor(path) {
+  if (!binMetaState.has(path)) {
+    binMetaState.set(path, { status: "loading", meta: null, error: null });
+  }
+  return binMetaState.get(path);
+}
+
+function renderBinMeta(det) {
+  return `<h3>Binary headers</h3><div id="binmeta-section">${renderBinMetaInner(binMetaFor(det.path))}</div>`;
+}
+
+function renderBinMetaInner(st) {
+  if (st.status === "loading") return `<p class="muted">inspecting headers…</p>`;
+  if (st.error) return `<p class="warn">${escapeHtml(st.error)}</p>`;
+  const m = st.meta;
+  if (!m) return `<p class="muted">no header metadata</p>`;
+
+  // Expandable list of every entry — no truncation.
+  const list = (label, arr) =>
+    arr?.length
+      ? `<details class="binmeta-list"><summary class="muted">${arr.length} ${label}</summary>
+          <ul>${arr.map((x) => `<li><code>${escapeHtml(x)}</code></li>`).join("")}</ul></details>`
+      : "";
+
+  const arches = m.arches
+    .map((a) => {
+      const bits = [
+        escapeHtml(a.arch),
+        escapeHtml(a.kind),
+        `${a.bits}-bit`,
+        escapeHtml(a.endianness),
+        a.entry ? `entry ${escapeHtml(a.entry)}` : null,
+        a.subsystem ? `${escapeHtml(a.subsystem)} subsystem` : null,
+        a.loadCommands != null ? `${a.loadCommands} load cmds` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const flags = (a.flags || [])
+        .map((f) => `<code>${escapeHtml(f)}</code>`)
+        .join(" ");
+      const rows = [];
+      rows.push(`<div><strong>${bits}</strong>${flags ? " " + flags : ""}</div>`);
+      if (a.interpreter) rows.push(`<div class="muted">interp: ${escapeHtml(a.interpreter)}</div>`);
+      if (a.soname) rows.push(`<div class="muted">soname: ${escapeHtml(a.soname)}</div>`);
+      if (a.timestamp) {
+        rows.push(`<div class="muted">linked: ${escapeHtml(new Date(a.timestamp * 1000).toISOString())}</div>`);
+      }
+      rows.push(
+        list(
+          "linked libraries",
+          (a.linkedLibraries || []).map((l) => (l.version ? `${l.name} (${l.version})` : l.name)),
+        ),
+      );
+      rows.push(list("segments / sections", a.segments));
+      return `<div class="advisory">${rows.join("")}</div>`;
+    })
+    .join("");
+  return `<p class="muted">format: <code>${escapeHtml(m.format)}</code></p>${arches}`;
+}
+
+function refreshBinMeta(det) {
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#binmeta-section");
+  if (el) el.innerHTML = renderBinMetaInner(binMetaFor(det.path));
+}
+
+function loadBinMeta(det) {
+  const st = binMetaFor(det.path);
+  if (st.meta || st.error) return; // already loaded this session
+  st.status = "loading";
+  invoke("binary_headers", { path: det.path, executable: det.executable ?? null })
+    .then((m) => {
+      st.meta = m;
+      st.status = "done";
+    })
+    .catch((err) => {
+      st.error = String(err);
+      st.status = "done";
+    })
+    .finally(() => refreshBinMeta(det));
+}
+
+// ---------- linked-library vulnerabilities (NVD by CPE) --------------
+
+const libCveState = new Map();
+function libCveFor(path) {
+  if (!libCveState.has(path)) {
+    libCveState.set(path, { status: "idle", results: null, error: null });
+  }
+  return libCveState.get(path);
+}
+
+function renderLibCve(det) {
+  return `<h3>Linked-library vulnerabilities</h3><div id="libcve-section">${renderLibCveInner(libCveFor(det.path))}</div>`;
+}
+
+function renderLibCveInner(st) {
+  if (st.status === "running") {
+    return `<p class="muted">detecting linked crypto libraries and querying NVD…</p>`;
+  }
+  if (st.status === "done" && st.results) {
+    if (!st.results.length) {
+      return `<p class="ok">No known CVEs for detected linked libraries (OpenSSL, LibreSSL, GnuTLS, wolfSSL, libsodium, mbedTLS, libgcrypt, NSS).</p><p><button type="button" data-libcve="run">Re-check</button></p>`;
+    }
+    const blocks = st.results
+      .map((r) => {
+        const advs = sortBySeverity(r.advisories).map(renderAdvisory).join("");
+        return `<div class="advisory bad"><strong>${escapeHtml(r.library)} ${escapeHtml(r.version)}</strong>
+          <span class="muted">${r.advisories.length} advisor${r.advisories.length === 1 ? "y" : "ies"}</span>
+          ${advs}</div>`;
+      })
+      .join("");
+    return `${blocks}<p><button type="button" data-libcve="run">Re-check</button></p>`;
+  }
+  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
+  return `${err}<p class="muted">Detect linked native crypto libraries (with versions) and check them against NVD by CPE. <button type="button" data-libcve="run">Check for CVEs</button></p>`;
+}
+
+function refreshLibCve(det) {
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#libcve-section");
+  if (el) el.innerHTML = renderLibCveInner(libCveFor(det.path));
+}
+
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-libcve]");
+  if (!btn || !currentDetail) return;
+  const det = currentDetail;
+  const st = libCveFor(det.path);
+  st.status = "running";
+  st.error = null;
+  refreshLibCve(det);
+  invoke("library_cves", { path: det.path, executable: det.executable ?? null })
+    .then((results) => {
+      st.results = results;
+      st.status = "done";
+    })
+    .catch((err) => {
+      st.error = String(err);
+      st.status = "idle";
+    })
+    .finally(() => refreshLibCve(det));
+});
 
 detailBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-rustaudit]");
