@@ -27,17 +27,29 @@ Achilles.app (user)                     achilles-netmon-helper (root LaunchDaemo
 
 ## Shipping (already wired)
 
-- **Build the helper per target** and stage it as the Tauri sidecar — done in
-  `publish.yml` (macOS job): `cargo build -p netmon-helper --release --target …`
-  → `src-tauri/binaries/achilles-netmon-helper`.
-- **Embed + sign** via `src-tauri/tauri.conf.json` → `bundle.macOS.files`:
-  - `MacOS/achilles-netmon-helper` ← the built helper (signed with the app's
-    Developer ID as part of bundle signing).
-  - `Library/LaunchDaemons/dev.crabnebula.achilles.netmon.plist` ← the daemon
-    plist (`src-tauri/macos/LaunchDaemons/…`).
-  - ⚠️ Confirm the `files` key base with one `cargo tauri build`: paths are
-    expected relative to the `.app/Contents` dir. If a build places them at the
-    `.app` root instead, prefix the keys with `Contents/`.
+- **Build + stage the helper per target** — `scripts/stage-netmon-helper.sh`,
+  run automatically as the `beforeDevCommand` / `beforeBuildCommand` in
+  `src-tauri/tauri.macos.conf.json`. It builds `netmon-helper` for
+  `$TAURI_ENV_TARGET_TRIPLE` (falling back to the host triple) and stages it at
+  `src-tauri/binaries/achilles-netmon-helper-<target-triple>`. The triple suffix
+  is mandatory: Tauri resolves sidecars per target and strips it when copying
+  into the bundle. Nothing to do by hand, locally or in CI.
+- **Embed + sign** via `src-tauri/tauri.macos.conf.json` → `bundle.externalBin`
+  (`binaries/achilles-netmon-helper`). Tauri copies sidecars to
+  `Contents/MacOS/achilles-netmon-helper` — the path the LaunchDaemon plist's
+  `BundleProgram` points at — and **signs each one as an executable**: Developer
+  ID + hardened runtime + secure timestamp. `externalBin` is a cross-platform
+  key, so it lives in the macOS-only config file; otherwise the Linux/Windows
+  jobs would demand a helper binary for their own triples.
+  - The daemon plist still rides along via `bundle.macOS.files` →
+    `Library/LaunchDaemons/dev.crabnebula.achilles.netmon.plist`. That's fine:
+    it's not a Mach-O, so it needs no signature of its own, and it's copied
+    before the app is sealed.
+  - ⚠️ Do **not** ship the helper via `bundle.macOS.files`. Those files are
+    copied but never added to the bundler's sign list, so the helper reaches
+    notarization unsigned and Apple rejects the archive with "not signed with a
+    valid Developer ID certificate" / "does not include a secure timestamp" /
+    "does not have the hardened runtime enabled".
 - **Notarization** already runs in `publish.yml`; the embedded helper +
   LaunchDaemon are covered because they're inside the bundle at sign time.
 

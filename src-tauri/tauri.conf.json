@@ -41,8 +41,7 @@
     },
     "macOS": {
       "files": {
-        "Library/LaunchDaemons/dev.crabnebula.achilles.netmon.plist": "macos/LaunchDaemons/dev.crabnebula.achilles.netmon.plist",
-        "MacOS/achilles-netmon-helper": "binaries/achilles-netmon-helper"
+        "Library/LaunchDaemons/dev.crabnebula.achilles.netmon.plist": "macos/LaunchDaemons/dev.crabnebula.achilles.netmon.plist"
       }
     }
   },

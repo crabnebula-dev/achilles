@@ -6,6 +6,8 @@ Cargo.lock.bak
 
 # Tauri
 src-tauri/target/
+# Sidecar binaries, staged per target triple at build time (see docs/netmon-helper.md)
+src-tauri/binaries/
 src-tauri/gen/schemas/
 src-tauri/WixTools/
 .tauri/
