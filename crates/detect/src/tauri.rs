@@ -31,7 +31,7 @@ pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> 
     let Some(exe) = layout.executable.as_deref() else {
         return Ok(None);
     };
-    if !exe.exists() {
+    if !vfs::exists(exe) {
         return Ok(None);
     }
 

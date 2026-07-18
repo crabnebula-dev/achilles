@@ -5,6 +5,7 @@
 //! audit actually needs: team identifier, authority chain, hardened-runtime
 //! flag, and notarization-staple presence.
 
+#[cfg(feature = "codesign")]
 use std::path::Path;
 
 use serde::Serialize;
@@ -21,6 +22,7 @@ pub struct CodeSignature {
     pub raw: String,
 }
 
+#[cfg(feature = "codesign")]
 pub async fn read(app_path: &Path) -> CodeSignature {
     let Ok(output) = tokio::process::Command::new("codesign")
         .arg("-dvvv")

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native:
+    name: native build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # GitHub-hosted runners ship a stable Rust toolchain, so no toolchain
+      # action is needed; cache cargo's registry/git + the build dir by hand.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+      # The analysis crates need no system libraries. Only `src-tauri` (the
+      # `achilles` package) needs webkit2gtk etc., so exclude it from the
+      # regression gate — this run verifies the wasm refactor didn't change
+      # native behaviour of the shared crates.
+      - run: cargo test --workspace --exclude achilles
+
+  wasm:
+    name: wasm build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build the web package
+        run: ./scripts/build-web.sh --release
+      - name: Type-check the analysis crates for wasm
+        run: cargo check --target wasm32-unknown-unknown -p achilles-wasm

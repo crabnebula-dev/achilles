@@ -202,7 +202,12 @@ async fn fetch_with_retry(
             }
             Err(e) => {
                 // Transport-level failure: timeout, connection reset, refused.
+                // `is_connect` is native-only on reqwest (no connect phase on
+                // the wasm fetch backend).
+                #[cfg(not(target_arch = "wasm32"))]
                 let transient = e.is_timeout() || e.is_connect() || e.is_request();
+                #[cfg(target_arch = "wasm32")]
+                let transient = e.is_timeout() || e.is_request();
                 if transient && attempt < MAX_ATTEMPTS {
                     backoff(attempt).await;
                     continue;
@@ -217,7 +222,10 @@ async fn fetch_with_retry(
 /// a stuck runtime can't stall a scan indefinitely.
 async fn backoff(attempt: u32) {
     let secs = (1u64 << attempt).min(8); // attempt 1→2s, 2→4s, 3→8s
+    #[cfg(not(target_arch = "wasm32"))]
     tokio::time::sleep(Duration::from_secs(secs)).await;
+    #[cfg(target_arch = "wasm32")]
+    gloo_timers::future::TimeoutFuture::new((secs * 1000) as u32).await;
 }
 
 /// Returns `Some(advisory)` only when `version` genuinely falls inside the

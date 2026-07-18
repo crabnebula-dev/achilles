@@ -1,0 +1,81 @@
+name: Refresh EUVD snapshot
+
+# The browser build ships a pre-fetched EUVD snapshot as a static asset (EUVD
+# blocks browser-origin requests, so the web build can't query it live). EUVD
+# publishes continuously, so this checks hourly whether any runtime Achilles
+# tracks gained or lost advisories and, only then, re-dispatches the Pages
+# deploy — which re-fetches the authoritative data at build time. The snapshot
+# version is a content hash, so an occasional redundant rebuild is harmless
+# (clients see no change); the probe is a best-effort gate on additions.
+#
+# Note: GitHub only runs `schedule` triggers from the default branch, so the
+# hourly run activates once this lands there. `workflow_dispatch` works from any
+# branch in the meantime.
+
+on:
+  schedule:
+    - cron: "17 * * * *" # hourly, off the top of the hour
+  workflow_dispatch:
+
+# Least privilege: this only dispatches the deploy workflow. It never writes
+# content, commits, or deploys a page itself.
+permissions:
+  actions: write
+
+concurrency:
+  group: euvd-refresh
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe EUVD totals against the deployed snapshot
+        id: probe
+        run: |
+          set -euo pipefail
+          api="https://euvdservices.enisa.europa.eu/api"
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo="${GITHUB_REPOSITORY##*/}"
+          base="https://${owner}.github.io/${repo}/browser/euvd"
+
+          # Previous per-shard counts from the deployed manifest. Absent on the
+          # very first run (no snapshot deployed yet) → refresh to seed it.
+          manifest="$(curl -fsS "$base/index.json" || true)"
+          if [ -z "$manifest" ]; then
+            echo "no deployed snapshot yet → refresh"
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # vendor|product|slug — must match scripts/fetch-euvd.sh.
+          pairs=(
+            "Electron|Electron|electron"
+            "Tauri|Tauri|tauri"
+            "Node.js|Node.js|node"
+            "Google|Chrome|chrome"
+            "Google|Flutter|flutter"
+            "Qt|Qt|qt"
+            "nwjs|NW.js|nwjs"
+            "Apple|Safari|safari"
+            "Oracle|JDK|jdk"
+          )
+          changed=false
+          for entry in "${pairs[@]}"; do
+            IFS='|' read -r vendor product slug <<<"$entry"
+            ev="$(jq -rn --arg s "$vendor" '$s|@uri')"
+            ep="$(jq -rn --arg s "$product" '$s|@uri')"
+            total="$(curl -fsS "$api/search?vendor=$ev&product=$ep&size=1&page=0" | jq -r '.total // 0')"
+            prev="$(jq -r --arg s "$slug" '.shards[$s].count // -1' <<<"$manifest")"
+            if [ "$total" != "$prev" ]; then
+              echo "$slug: live total=$total, snapshot count=$prev → stale"
+              changed=true
+            fi
+          done
+          echo "changed=$changed" >>"$GITHUB_OUTPUT"
+
+      - name: Dispatch the Pages deploy when the snapshot is stale
+        if: steps.probe.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}"

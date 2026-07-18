@@ -20,17 +20,17 @@ pub struct Detection {
 }
 
 pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         macos::detect(layout)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         portable::detect(layout)
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(macos_layout))]
 mod portable {
     use super::*;
     use std::sync::LazyLock;
@@ -73,7 +73,7 @@ mod portable {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 mod macos {
     use std::path::Path;
 
@@ -82,7 +82,7 @@ mod macos {
     pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
         let frameworks = layout.frameworks_dir();
         let qt_core_dir = frameworks.join("QtCore.framework");
-        if !qt_core_dir.is_dir() {
+        if !vfs::is_dir(&qt_core_dir) {
             return Ok(None);
         }
 
@@ -103,7 +103,7 @@ mod macos {
             "Resources/Info.plist",
         ] {
             let plist = qt_core_dir.join(rel);
-            if !plist.exists() {
+            if !vfs::exists(&plist) {
                 continue;
             }
             if let Some(v) = plist_version(&plist) {
@@ -115,7 +115,7 @@ mod macos {
 
     fn scan_qt_webengine_chromium(frameworks: &Path) -> Result<Option<String>, crate::DetectError> {
         let qt_webengine_dir = frameworks.join("QtWebEngineCore.framework");
-        if !qt_webengine_dir.is_dir() {
+        if !vfs::is_dir(&qt_webengine_dir) {
             return Ok(None);
         }
         for rel in &[
@@ -125,7 +125,7 @@ mod macos {
             "QtWebEngineCore",
         ] {
             let bin = qt_webengine_dir.join(rel);
-            if bin.exists() {
+            if vfs::exists(&bin) {
                 let (chromium, _node) =
                     strings::scan_electron_versions(&bin).map_err(|source| {
                         crate::DetectError::Io {
@@ -140,7 +140,7 @@ mod macos {
     }
 
     fn plist_version(plist_path: &Path) -> Option<String> {
-        let value = plist::Value::from_file(plist_path).ok()?;
+        let value = crate::read_plist(plist_path)?;
         let dict = value.as_dictionary()?;
         dict.get("CFBundleShortVersionString")
             .or_else(|| dict.get("CFBundleVersion"))

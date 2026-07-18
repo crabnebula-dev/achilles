@@ -18,11 +18,11 @@ pub struct Detection {
 }
 
 pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         macos::detect(layout)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         let has_nw = layout.has_library("nw.dll") || layout.find_file("libnw").is_some();
         if !has_nw {
@@ -41,7 +41,7 @@ pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> 
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 mod macos {
     use std::path::Path;
 
@@ -51,7 +51,7 @@ mod macos {
 
     pub fn detect(layout: &Layout) -> Result<Option<Detection>, crate::DetectError> {
         let framework_dir = layout.frameworks_dir().join("nwjs Framework.framework");
-        if !framework_dir.is_dir() {
+        if !vfs::is_dir(&framework_dir) {
             return Ok(None);
         }
 
@@ -67,8 +67,8 @@ mod macos {
             } else {
                 framework_dir.join(bin_rel).join(FRAMEWORK_BIN_NAME)
             };
-            if p.exists() {
-                Some((Some(p), b.exists().then_some(b)))
+            if vfs::exists(&p) {
+                Some((Some(p), vfs::exists(&b).then_some(b)))
             } else {
                 None
             }
@@ -92,7 +92,7 @@ mod macos {
     }
 
     fn read_version(plist_path: &Path) -> Option<String> {
-        let value = plist::Value::from_file(plist_path).ok()?;
+        let value = crate::read_plist(plist_path)?;
         let dict = value.as_dictionary()?;
         dict.get("CFBundleShortVersionString")
             .or_else(|| dict.get("CFBundleVersion"))

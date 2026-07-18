@@ -30,6 +30,29 @@ pub use settings::{
     GhsaSettings, NvdSettings, OsvSettings, Settings, SourceSettings,
 };
 
+/// Load one EUVD snapshot shard into the in-memory store the browser build's
+/// EUVD lookup reads. The web build can't query EUVD directly — it blocks
+/// browser-origin requests (CORS) — so it ships a pre-fetched per-runtime
+/// snapshot as a same-origin static asset. `bytes` is the trimmed `Entry` array
+/// for the `(vendor, product)` pair. wasm-only; driven from `achilles-wasm`.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_set_shard(vendor: String, product: String, bytes: &[u8]) -> Result<(), String> {
+    sources::euvd::snapshot::set_shard(vendor, product, bytes)
+}
+
+/// Mark the loaded EUVD shards as the active snapshot at `version` and clear the
+/// session cache. wasm-only.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_commit(version: String) {
+    sources::euvd::snapshot::commit(version);
+}
+
+/// The active EUVD snapshot version, or `None` if none is loaded yet. wasm-only.
+#[cfg(target_arch = "wasm32")]
+pub fn euvd_snapshot_version() -> Option<String> {
+    sources::euvd::snapshot::version()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
@@ -51,7 +74,12 @@ impl Error {
     pub fn is_transient(&self) -> bool {
         match self {
             Error::Unavailable(_) => true,
+            // `is_connect` is native-only on reqwest; the wasm fetch backend has
+            // no separate connect phase.
+            #[cfg(not(target_arch = "wasm32"))]
             Error::Http(e) => e.is_timeout() || e.is_connect() || e.is_request(),
+            #[cfg(target_arch = "wasm32")]
+            Error::Http(e) => e.is_timeout() || e.is_request(),
             Error::BadPayload(_) => false,
         }
     }
@@ -178,6 +206,9 @@ impl Client_ {
     }
 
     pub fn with_settings(settings: Settings) -> Self {
+        // The browser controls the User-Agent (and reqwest's wasm `ClientBuilder`
+        // has no `user_agent`), so only set it on native.
+        #[cfg(not(target_arch = "wasm32"))]
         let http = Client::builder()
             .user_agent(concat!(
                 "achilles/",
@@ -186,6 +217,8 @@ impl Client_ {
             ))
             .build()
             .expect("reqwest client builder");
+        #[cfg(target_arch = "wasm32")]
+        let http = Client::builder().build().expect("reqwest client builder");
         Self { http, settings }
     }
 
@@ -224,15 +257,17 @@ impl Client_ {
     /// retrying 503s). Each snapshot is filtered exactly like the final report,
     /// so callers can render it directly and simply replace the previous one.
     /// The returned value is the final, fully-populated report.
-    pub async fn report_for_streaming<F>(
-        &self,
-        versions: &Versions,
-        mut emit: F,
-    ) -> CveReport
+    pub async fn report_for_streaming<F>(&self, versions: &Versions, mut emit: F) -> CveReport
     where
         F: FnMut(CveReport),
     {
+        // wasm futures (reqwest's fetch `Response`) aren't `Send`, so box them
+        // without the `Send` bound there; native keeps `Send` for the
+        // multi-threaded tokio runtime.
+        #[cfg(not(target_arch = "wasm32"))]
         use futures::future::BoxFuture;
+        #[cfg(target_arch = "wasm32")]
+        use futures::future::LocalBoxFuture as BoxFuture;
         use futures::stream::{FuturesUnordered, StreamExt};
 
         let mut report = CveReport::default();
@@ -905,11 +940,26 @@ fn advisory_year(advisory: &Advisory) -> Option<u32> {
         .and_then(|yr| yr.parse().ok())
 }
 
-/// Current Gregorian year from `SystemTime::now()`. Hand-rolled to avoid
-/// pulling in `chrono`.
-fn current_year() -> Option<u32> {
+/// Seconds since the Unix epoch. Native reads the system clock; wasm uses the
+/// browser's `Date.now()`, since `std::time::SystemTime::now()` panics on
+/// `wasm32-unknown-unknown`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn now_unix() -> u64 {
+    (js_sys::Date::now() / 1000.0) as u64
+}
+
+/// Current Gregorian year. Hand-rolled to avoid pulling in `chrono`.
+fn current_year() -> Option<u32> {
+    let secs = now_unix();
     let days = (secs / 86_400) as i64;
     let mut year = 1970u32;
     let mut remaining = days;

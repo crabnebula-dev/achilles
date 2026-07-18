@@ -24,12 +24,12 @@ pub fn detect(layout: &Layout) -> Option<Detection> {
     let root = &layout.root;
 
     // Platform-conventional fixed `release` locations.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     let fixed: &[&str] = &[
         "Contents/Runtime/Contents/Home/release",
         "Contents/Resources/Java/jre/release",
     ];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     let fixed: &[&str] = &["runtime/release", "jre/release", "lib/runtime/release"];
 
     for rel in fixed {
@@ -39,10 +39,10 @@ pub fn detect(layout: &Layout) -> Option<Detection> {
     }
 
     // macOS also stashes JREs under `Contents/PlugIns/*.jdk` / `jre`.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         let plugins = root.join("Contents/PlugIns");
-        if let Ok(entries) = std::fs::read_dir(&plugins) {
+        if let Ok(entries) = vfs::read_dir(&plugins) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_s = name.to_string_lossy();
@@ -79,7 +79,7 @@ fn is_java_launcher(name: &str) -> bool {
 }
 
 fn parse_release_file(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = vfs::read(path).ok()?;
     let text = std::str::from_utf8(&bytes).ok()?;
     for line in text.lines() {
         let trimmed = line.trim();

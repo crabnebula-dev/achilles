@@ -18,12 +18,12 @@ use crate::app::Layout;
 
 /// Return the embedded Chromium build if the app embeds CEF, else `None`.
 pub fn detect(layout: &Layout) -> Option<String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(macos_layout)]
     {
         let framework_dir = layout
             .frameworks_dir()
             .join("Chromium Embedded Framework.framework");
-        if !framework_dir.is_dir() {
+        if !vfs::is_dir(&framework_dir) {
             return None;
         }
         // Prefer the real Chromium build scanned from the framework binary's
@@ -48,7 +48,7 @@ pub fn detect(layout: &Layout) -> Option<String> {
         // better than no signal, though it won't match Chromium CVE CPEs.
         for rel in &["Versions/A/Resources/Info.plist", "Resources/Info.plist"] {
             let plist_path = framework_dir.join(rel);
-            if !plist_path.exists() {
+            if !vfs::exists(&plist_path) {
                 continue;
             }
             if let Some(v) = read_plist_version(&plist_path) {
@@ -57,7 +57,7 @@ pub fn detect(layout: &Layout) -> Option<String> {
         }
         Some("unknown".to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(macos_layout))]
     {
         if !layout.has_library("libcef") {
             return None;
@@ -73,9 +73,9 @@ pub fn detect(layout: &Layout) -> Option<String> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos_layout)]
 fn read_plist_version(plist_path: &std::path::Path) -> Option<String> {
-    let value = plist::Value::from_file(plist_path).ok()?;
+    let value = crate::read_plist(plist_path)?;
     let dict = value.as_dictionary()?;
     dict.get("CFBundleShortVersionString")
         .or_else(|| dict.get("CFBundleVersion"))

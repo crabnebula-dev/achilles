@@ -30,11 +30,18 @@
 //! `offset` is a string because Electron supports archives larger than JS's
 //! 2^53 integer range.
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use memmap2::Mmap;
+
+/// Backing store for the archive bytes: a read-only mmap on native, an owned
+/// buffer (from the in-memory upload tree) on wasm. Both deref to `[u8]`, so
+/// the parser and `read()` below are identical across targets.
+#[cfg(not(target_arch = "wasm32"))]
+type Backing = Mmap;
+#[cfg(target_arch = "wasm32")]
+type Backing = Vec<u8>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AsarError {
@@ -60,18 +67,24 @@ pub struct Entry {
 pub struct Archive {
     #[allow(dead_code)] // retained for future diagnostics (stable across the archive's lifetime)
     path: PathBuf,
-    /// Memory-mapped archive, retained for the archive's lifetime.
-    mmap: Mmap,
-    /// Byte offset of the first file body within the mmap.
+    /// Archive bytes (mmap on native, owned buffer on wasm), retained for the
+    /// archive's lifetime.
+    mmap: Backing,
+    /// Byte offset of the first file body within the archive bytes.
     body_start: u64,
     entries: Vec<Entry>,
 }
 
 impl Archive {
     pub fn open(path: &Path) -> Result<Self, AsarError> {
-        let file = File::open(path)?;
-        // Safety: we only read the mapping and never alias it as `&mut`.
-        let mmap = unsafe { Mmap::map(&file)? };
+        #[cfg(not(target_arch = "wasm32"))]
+        let mmap: Backing = {
+            let file = std::fs::File::open(path)?;
+            // Safety: we only read the mapping and never alias it as `&mut`.
+            unsafe { Mmap::map(&file)? }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let mmap: Backing = vfs::read(path)?;
 
         if mmap.len() < 16 {
             return Err(AsarError::Malformed("file shorter than 16 bytes".into()));
@@ -184,8 +197,12 @@ fn walk_node(node: &serde_json::Value, prefix: &str, out: &mut Vec<Entry>) {
 
 /// Read the first `json_len` bytes as a UTF-8 header without mmapping (used
 /// by tools that only want the header JSON and not file bodies).
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(dead_code)]
 pub fn read_header_bytes(path: &Path) -> Result<Vec<u8>, AsarError> {
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom};
+
     let mut file = File::open(path)?;
     let mut prefix = [0u8; 16];
     file.read_exact(&mut prefix)?;

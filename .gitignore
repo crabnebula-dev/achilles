@@ -25,6 +25,10 @@ out/
 .nuxt/
 .svelte-kit/
 .vite/
+# wasm-pack output for the web build (rebuilt via scripts/build-web.sh)
+/ui/pkg/
+# generated browser demo for GitHub Pages (built by scripts/build-demo.sh / CI)
+/docs/browser/
 
 # Logs
 *.log

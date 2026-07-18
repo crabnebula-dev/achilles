@@ -9,18 +9,23 @@ repository.workspace = true
 description = "Regex-based static analysis rules for Electron app bundles. Reads ASAR archives directly."
 
 [dependencies]
-memmap2.workspace = true
-rayon.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+vfs.workspace = true
 # RAST :)
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_ast_visit.workspace = true
 oxc_parser.workspace = true
 oxc_span.workspace = true
+
+# The ASAR reader mmaps on native (owned buffer via `vfs` on wasm); the corpus
+# loop fans out with rayon on native (sequential fallback on wasm).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 

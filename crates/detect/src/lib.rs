@@ -41,6 +41,15 @@ pub use app::DiscoveredApp;
 use app::Layout;
 pub use bundle::BundleInfo;
 
+/// Read and parse a property list through [`vfs`] (so it works against the real
+/// filesystem on native and the in-memory upload tree on wasm). Returns `None`
+/// if the file is missing or malformed — callers degrade to partial results.
+/// Only the macOS bundle-layout probes read plists, hence the gate.
+#[cfg(macos_layout)]
+pub(crate) fn read_plist(path: &std::path::Path) -> Option<plist::Value> {
+    plist::Value::from_reader(std::io::Cursor::new(vfs::read(path).ok()?)).ok()
+}
+
 /// Framework class of an application — be it a macOS `.app` bundle, a Windows
 /// install directory, or a Linux binary plus its sibling files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -197,7 +206,7 @@ pub fn detect(app_path: &Path) -> Result<Detection, DetectError> {
 /// the entry point the scanner uses: discovery has already resolved the root,
 /// executable, and display name per-OS.
 pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
-    if !app.path.exists() {
+    if !vfs::exists(&app.path) {
         return Err(DetectError::NotFound(app.path.clone()));
     }
 
@@ -219,7 +228,7 @@ pub fn detect_app(app: &DiscoveredApp) -> Result<Detection, DetectError> {
         .executable
         .clone()
         .or_else(|| bundle.executable.clone())
-        .filter(|p| p.is_file());
+        .filter(|p| vfs::is_file(p));
     let layout = Layout::new(app.root.clone(), executable);
     let identity = &app.path;
 

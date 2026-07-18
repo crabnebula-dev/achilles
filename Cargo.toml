@@ -61,6 +61,13 @@ flate2 = "1"
 toml = "0.8"
 # data-parallelism for the static-scan corpus loop
 rayon = "1.10"
+# wasm / browser entry point (the `achilles-wasm` crate); pinned centrally so
+# every wasm-binding dependency (incl. reqwest's wasm backend) resolves to one
+# `wasm-bindgen` version.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # JS / TS AST parsing for the static-scan rules
 oxc_allocator = "0.126"
 oxc_ast = "0.126"
@@ -68,6 +75,7 @@ oxc_ast_visit = "0.126"
 oxc_parser = "0.126"
 oxc_span = "0.126"
 # internal crates referenced across the workspace
+vfs = { path = "crates/vfs" }
 detect = { path = "crates/detect" }
 scan = { path = "crates/scan" }
 cve = { path = "crates/cve" }
