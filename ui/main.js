@@ -52,8 +52,53 @@ function escapeHtml(s) {
   })[c]);
 }
 
-function isStale(framework, versions) {
-  // Extremely rough heuristic for now — later replaced by CVE-backed scoring.
+// Compact human byte count (e.g. 1536 → "1.5 KB").
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
+}
+
+// The runtime keys that carry CVE advisory lists in a `cve_lookup` report.
+// Shared by the risk model and the runtime-CVE tab so they stay in sync (the
+// report also holds `errors`/`unavailable`/`pending`, which are NOT advisories).
+const RUNTIME_CVE_SOURCES = [
+  { key: "electron", label: "Electron" },
+  { key: "chromium", label: "Chromium" },
+  { key: "cef", label: "CEF (Chromium)" },
+  { key: "node", label: "Node.js" },
+  { key: "deno", label: "Deno" },
+  { key: "tauri", label: "Tauri" },
+  { key: "flutter", label: "Flutter" },
+  { key: "qt", label: "Qt" },
+  { key: "nwjs", label: "NW.js" },
+  { key: "react_native", label: "React Native" },
+  { key: "wails", label: "Wails" },
+  { key: "sciter", label: "Sciter" },
+  { key: "java", label: "Java / JDK" },
+  { key: "webkit", label: "Safari / WKWebView (system)" },
+];
+
+// Risk levels are ordered so we can take the more severe of two ratings.
+// `unknown` is "unrated" — any concrete rating outranks it.
+const RISK_ORDER = { ok: 1, warn: 2, bad: 3 };
+function maxRisk(a, b) {
+  if (a === "unknown") return b;
+  if (b === "unknown") return a;
+  return (RISK_ORDER[a] ?? 0) >= (RISK_ORDER[b] ?? 0) ? a : b;
+}
+
+// Version-based risk: the rough "is this runtime old enough to worry about"
+// heuristic. Deliberately conservative — it only downgrades frameworks whose
+// release cadence gives a defensible cutoff, and leaves the rest `unknown`
+// (which the findings-based floor can still escalate).
+function versionRisk(framework, versions) {
   if (framework === "electron") {
     const e = versions.electron;
     if (!e) return "unknown";
@@ -81,34 +126,112 @@ function isStale(framework, versions) {
   return "unknown";
 }
 
+// Severity of an advisory list: `"bad"` if any high/critical, `"warn"` if the
+// list is non-empty (a known-vulnerable, therefore outdated, dependency), else
+// `null` (no evidence).
+function advisoryListRisk(list) {
+  let risk = null;
+  for (const a of list ?? []) {
+    if (severityRank(a.severity) >= 3) return "bad";
+    risk = "warn";
+  }
+  return risk;
+}
+
+// Risk implied by what we've actually *learned* about an app's dependencies:
+// runtime CVEs, npm dependency advisories, RustSec findings, and linked-library
+// CVEs. Returns `null` when we know of no outdated/vulnerable dependency. Any
+// such evidence means the dependency is behind a fixed release — i.e. outdated —
+// so it floors the risk at `warn` (and `bad` for high/critical).
+function findingsRisk(det, findings) {
+  let risk = null;
+  const bump = (level) => {
+    if (level) risk = maxRisk(risk ?? "ok", level);
+  };
+
+  // Runtime CVEs — only once the report has resolved (not pending/errored).
+  const cves = findings?.cves;
+  if (cves && !cves.pending && !cves.error) {
+    for (const { key } of RUNTIME_CVE_SOURCES) bump(advisoryListRisk(cves[key]));
+  }
+
+  // npm dependency advisories (array of { advisories: [...] }).
+  if (Array.isArray(findings?.depAdvisories)) {
+    for (const d of findings.depAdvisories) bump(advisoryListRisk(d.advisories));
+  }
+
+  // RustSec audit (on-demand, kept in its own state map). A non-informational
+  // finding is a known-vulnerable crate — an outdated dependency.
+  const rust = rustAuditState.get(det.path)?.report;
+  if (rust && !rust.dbError) {
+    for (const f of rust.findings ?? []) if (!f.informational) bump("warn");
+  }
+
+  // Linked-library CVEs (on-demand NVD lookup by CPE).
+  const libs = libCveState.get(det.path)?.results;
+  if (Array.isArray(libs)) for (const r of libs) bump(advisoryListRisk(r.advisories));
+
+  return risk;
+}
+
+// Overall row risk: the version heuristic, floored by anything we've learned
+// about outdated/vulnerable dependencies. `findings` is the per-path
+// `detailCache` entry (undefined until the app's detail pane has been opened).
+function riskLevel(det, findings) {
+  const base = versionRisk(det.framework, det.versions);
+  const fromFindings = findingsRisk(det, findings);
+  return fromFindings ? maxRisk(base, fromFindings) : base;
+}
+
 function renderRow(det) {
   const v = det.versions;
   const name = det.display_name || det.bundle_id || det.path;
-  const risk = isStale(det.framework, v);
+  const risk = riskLevel(det, detailCache.get(det.path));
 
   const tr = document.createElement("tr");
   tr.dataset.path = det.path;
   tr.innerHTML = `
+    <td><span class="risk ${risk}">${risk}</span></td>
     <td class="name">${escapeHtml(name)}</td>
+    <td class="version">${escapeHtml(det.bundle_version ?? "")}</td>
     <td><span class="framework-tag ${escapeHtml(det.framework)}">${escapeHtml(det.framework)}</span></td>
     <td class="version">${escapeHtml(v.electron ?? "")}</td>
     <td class="version">${escapeHtml(v.chromium ?? "")}</td>
     <td class="version">${escapeHtml(v.node ?? "")}</td>
     <td class="version">${escapeHtml(v.tauri ?? "")}</td>
     <td class="version">${escapeHtml(v.cef ?? "")}</td>
-    <td><span class="risk ${risk}">${risk}</span></td>
   `;
   tr.addEventListener("click", () => openDetail(det));
   return tr;
 }
 
+// Recompute a row's risk badge from the latest findings (called as an app's
+// detail slices resolve, so the table reflects what we've learned about its
+// outdated/vulnerable dependencies). Also re-applies any active risk filter.
+function updateRowRisk(path) {
+  const entry = rows.get(path);
+  if (!entry) return;
+  const risk = riskLevel(entry.detection, detailCache.get(path));
+  const span = entry.row.querySelector(".risk");
+  if (span) {
+    span.className = `risk ${risk}`;
+    span.textContent = risk;
+  }
+  entry.row.hidden = !rowMatches(entry.detection);
+}
+
 function sortRowsInto(container) {
+  // Sort from the detection data (not DOM cell order) so it's robust to column
+  // layout: group by framework, then by display name.
+  const detOf = (tr) => rows.get(tr.dataset.path)?.detection;
+  const nameOf = (d) => (d ? d.display_name || d.bundle_id || d.path : "");
   const sorted = [...container.children].sort((a, b) => {
-    // Group by framework, then name.
-    const fa = a.children[1].textContent.trim();
-    const fb = b.children[1].textContent.trim();
+    const da = detOf(a);
+    const db = detOf(b);
+    const fa = da?.framework ?? "";
+    const fb = db?.framework ?? "";
     if (fa !== fb) return fa.localeCompare(fb);
-    return a.children[0].textContent.localeCompare(b.children[0].textContent);
+    return nameOf(da).localeCompare(nameOf(db));
   });
   container.replaceChildren(...sorted);
 }
@@ -131,14 +254,15 @@ function handleDetection(det) {
 // present in the table. An active filter reveals a "×" to clear it.
 
 const COLUMNS = [
+  { key: "risk", label: "Risk", type: "select" },
   { key: "name", label: "App", type: "search" },
+  { key: "appVersion", label: "Version", type: "search" },
   { key: "framework", label: "Framework", type: "select" },
   { key: "electron", label: "Electron", type: "select" },
   { key: "chromium", label: "Chromium", type: "select" },
   { key: "node", label: "Node", type: "select" },
   { key: "tauri", label: "Tauri", type: "select" },
   { key: "cef", label: "CEF", type: "select" },
-  { key: "risk", label: "Risk", type: "select" },
 ];
 
 /** Active filters: column key → filter string (substring for search, exact for select). */
@@ -153,10 +277,12 @@ function cellValue(det, key) {
   switch (key) {
     case "name":
       return det.display_name || det.bundle_id || det.path || "";
+    case "appVersion":
+      return det.bundle_version ?? "";
     case "framework":
       return det.framework || "";
     case "risk":
-      return isStale(det.framework, v);
+      return riskLevel(det, detailCache.get(det.path));
     default:
       return v[key] ?? "";
   }
@@ -414,6 +540,9 @@ async function openDetail(det) {
     // Repaint from whatever slices have resolved so far. The stillOpen() guard
     // keeps a slow promise from a previous click out of a newer pane.
     const repaint = () => {
+      // Reflect newly-learned findings in the table's risk badge, even if this
+      // app is no longer the open one (a background slice can still resolve).
+      updateRowRisk(det.path);
       if (stillOpen()) {
         detailBody.innerHTML = renderDetail(
           det,
@@ -590,27 +719,10 @@ function runtimeCvesContent(cves) {
     return { count: null, html: `<p class="warn">${escapeHtml(cves.error)}</p>` };
   }
 
-  const sources = [
-    { key: "electron", label: "Electron" },
-    { key: "chromium", label: "Chromium" },
-    { key: "cef", label: "CEF (Chromium)" },
-    { key: "node", label: "Node.js" },
-    { key: "deno", label: "Deno" },
-    { key: "tauri", label: "Tauri" },
-    { key: "flutter", label: "Flutter" },
-    { key: "qt", label: "Qt" },
-    { key: "nwjs", label: "NW.js" },
-    { key: "react_native", label: "React Native" },
-    { key: "wails", label: "Wails" },
-    { key: "sciter", label: "Sciter" },
-    { key: "java", label: "Java / JDK" },
-    { key: "webkit", label: "Safari / WKWebView (system)" },
-  ];
-
   const parts = [];
   let count = 0;
 
-  for (const { key, label } of sources) {
+  for (const { key, label } of RUNTIME_CVE_SOURCES) {
     const list = sortBySeverity(cves[key] ?? []);
     if (list.length === 0) continue;
     count += list.length;
@@ -1158,9 +1270,10 @@ function renderCryptoInner(det, st) {
           }</div>`,
       )
       .join("");
-    return `${err}${notice}<p class="warn">● recording — ${c.handshakes || 0} handshake(s), ${
-      c.flows || 0
-    } flow(s). Use the app to generate traffic. <button type="button" data-crypto="stop">Stop &amp; build CBOM</button></p>
+    const seen = c.bytes
+      ? `${fmtBytes(c.bytes)} captured · ${c.flows || 0} destination(s) · ${c.handshakes || 0} handshake(s)`
+      : "waiting for the first packet…";
+    return `${err}${notice}<p class="warn">● recording — ${seen}. Use the app to generate traffic. <button type="button" data-crypto="stop">Stop &amp; build CBOM</button></p>
       ${dests ? `<table class="crypto-dests"><thead><tr><th>host</th><th>port</th><th>sni</th></tr></thead><tbody>${dests}</tbody></table>` : `<p class="muted">waiting for connections…</p>`}
       ${hs}`;
   }
@@ -1537,6 +1650,7 @@ detailBody.addEventListener("click", (e) => {
     .then((results) => {
       st.results = results;
       st.status = "done";
+      updateRowRisk(det.path);
     })
     .catch((err) => {
       st.error = String(err);
@@ -1557,6 +1671,7 @@ detailBody.addEventListener("click", (e) => {
     .then((rep) => {
       st.report = rep;
       st.status = "done";
+      updateRowRisk(det.path);
     })
     .catch((err) => {
       st.error = String(err);

@@ -219,6 +219,9 @@ pub async fn set_reporting_config(
     } else if !config.autostart && is_on {
         manager.disable().map_err(|e| e.to_string())?;
     }
+
+    // Reflect the new reporting on/off state in the tray status line at once.
+    crate::refresh_tray_status(&app);
     Ok(())
 }
 
@@ -303,14 +306,29 @@ pub async fn netmon_start(
 
     let mut session = netmon::Session::new(session_id, target, backend_id, now);
     let join = tauri::async_runtime::spawn(async move {
+        // A steady heartbeat pushes counters (bytes / flows / handshakes) to the
+        // UI even when packets produce no new deltas — so the user always sees
+        // that capture is live and traffic is flowing, not a frozen "0".
+        let mut heartbeat = tokio::time::interval(std::time::Duration::from_millis(500));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // The loop ends when the capture stops (its sender is dropped).
-        while let Some(ev) = rx.recv().await {
-            let deltas = session.ingest(ev);
-            if !deltas.is_empty() {
-                for delta in deltas {
-                    let _ = on_event.send(delta);
+        loop {
+            tokio::select! {
+                maybe = rx.recv() => match maybe {
+                    Some(ev) => {
+                        let deltas = session.ingest(ev);
+                        if !deltas.is_empty() {
+                            for delta in deltas {
+                                let _ = on_event.send(delta);
+                            }
+                            let _ = on_event.send(session.counters());
+                        }
+                    }
+                    None => break, // capture backend stopped (or died)
+                },
+                _ = heartbeat.tick() => {
+                    let _ = on_event.send(session.counters());
                 }
-                let _ = on_event.send(session.counters());
             }
         }
         let evidence = session.crypto_evidence();
@@ -546,6 +564,12 @@ pub struct OsInfo {
 
 #[tauri::command]
 pub async fn os_info() -> OsInfo {
+    compute_os_info()
+}
+
+/// Synchronous OS-version assessment, shared by the [`os_info`] command and the
+/// tray status line.
+pub(crate) fn compute_os_info() -> OsInfo {
     let os = std::env::consts::OS.to_string();
     let version = sysinfo::System::os_version();
     let display = sysinfo::System::long_os_version()
@@ -583,6 +607,12 @@ pub async fn os_info() -> OsInfo {
 /// Open the OS software-update settings.
 #[tauri::command]
 pub async fn open_os_update() -> Result<(), String> {
+    open_os_update_settings().map_err(|e| e.to_string())
+}
+
+/// Launch the platform's software-update settings. Shared by the [`open_os_update`]
+/// command and the tray's "System update available" item.
+pub(crate) fn open_os_update_settings() -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let spawn = std::process::Command::new("open")
         .arg("x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
@@ -596,7 +626,7 @@ pub async fn open_os_update() -> Result<(), String> {
         .arg("gnome-control-center")
         .spawn();
 
-    spawn.map(|_| ()).map_err(|e| e.to_string())
+    spawn.map(|_| ())
 }
 
 // ---------- rust-audit (cargo-auditable + RustSec) -------------------

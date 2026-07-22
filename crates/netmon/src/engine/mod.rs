@@ -50,8 +50,10 @@ impl Session {
             } => {
                 self.last_at = at.max(self.last_at);
                 let dest = key.remote.to_string();
-                self.touch_destination(&dest, key.remote.ip().to_string(), key.remote.port(), bytes.len() as u64, at);
-                self.handle_stream(&dest, dir, &bytes, at)
+                let is_new = self.touch_destination(&dest, key.remote.ip().to_string(), key.remote.port(), bytes.len() as u64, at);
+                let mut out = self.new_dest_delta(&dest, is_new);
+                out.extend(self.handle_stream(&dest, dir, &bytes, at));
+                out
             }
             CapturedEvent::FlowOpened { key, at, .. } => {
                 self.last_at = at.max(self.last_at);
@@ -66,7 +68,7 @@ impl Session {
                 match packet::decode(link, &data) {
                     Some(d) => {
                         let dest = d.remote.to_string();
-                        self.touch_destination(
+                        let is_new = self.touch_destination(
                             &dest,
                             d.remote.ip().to_string(),
                             d.remote.port(),
@@ -78,7 +80,9 @@ impl Session {
                         } else {
                             Direction::Inbound
                         };
-                        self.handle_stream(&dest, dir, &d.payload, at)
+                        let mut out = self.new_dest_delta(&dest, is_new);
+                        out.extend(self.handle_stream(&dest, dir, &d.payload, at));
+                        out
                     }
                     None => vec![],
                 }
@@ -87,17 +91,34 @@ impl Session {
         }
     }
 
-    fn touch_destination(&mut self, key: &str, ip: String, port: u16, bytes: u64, at: u64) {
+    /// Record traffic to a destination, creating it if unseen. Returns `true`
+    /// when this call first created the destination (so the caller can stream a
+    /// `Destination` delta — packet-based backends have no `FlowOpened` event).
+    fn touch_destination(&mut self, key: &str, ip: String, port: u16, bytes: u64, at: u64) -> bool {
         self.bytes_total += bytes;
-        let d = self.destinations.entry(key.to_string()).or_insert_with(|| Destination {
-            remote_ip: ip,
-            port,
-            first_seen: at,
-            flow_count: 1,
-            ..Default::default()
+        let mut created = false;
+        let d = self.destinations.entry(key.to_string()).or_insert_with(|| {
+            created = true;
+            Destination {
+                remote_ip: ip,
+                port,
+                first_seen: at,
+                flow_count: 1,
+                ..Default::default()
+            }
         });
         d.bytes_total += bytes;
         d.last_seen = at;
+        created
+    }
+
+    /// A `Destination` delta for a newly-seen destination, or nothing.
+    fn new_dest_delta(&self, key: &str, is_new: bool) -> Vec<SessionDelta> {
+        if is_new {
+            vec![SessionDelta::Destination(self.destinations[key].clone())]
+        } else {
+            vec![]
+        }
     }
 
     fn handle_stream(&mut self, dest: &str, dir: Direction, bytes: &[u8], _at: u64) -> Vec<SessionDelta> {

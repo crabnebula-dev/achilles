@@ -15,11 +15,12 @@ mod helper_mac;
 mod journal;
 mod reporting;
 
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, WindowEvent, Wry};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 /// Serialises reassessment runs so the scheduler, tray, and manual command can
@@ -42,6 +43,136 @@ pub struct ActiveCapture {
 #[derive(Default)]
 pub struct NetmonState(pub tokio::sync::Mutex<Option<ActiveCapture>>);
 
+/// The outcome of the most recent reassessment, summarised for the tray status
+/// lines.
+#[derive(Clone, Copy)]
+struct LastRun {
+    /// Unix seconds the run finished.
+    at: u64,
+    /// Apps in the inventory it built.
+    count: usize,
+    /// Whether the inventory was actually POSTed (vs. built-but-not-sent because
+    /// reporting is off/unconfigured).
+    sent: bool,
+    /// Whether the run succeeded.
+    ok: bool,
+    /// Version-based risk tally over every detected app.
+    risk: reporting::RiskSummary,
+}
+
+/// Backs the tray-menu status lines. Holds the three menu items so the scheduler
+/// can relabel them, plus the last reassessment outcome they summarise. Held as
+/// Tauri-managed state.
+#[derive(Default)]
+pub struct TrayStatus {
+    /// "N apps need attention" (click → show window).
+    risk_item: Mutex<Option<MenuItem<Wry>>>,
+    /// "System update available" (click → open OS update settings).
+    os_item: Mutex<Option<MenuItem<Wry>>>,
+    /// Reporting on/off + last-check summary (disabled label).
+    reporting_item: Mutex<Option<MenuItem<Wry>>>,
+    last: Mutex<Option<LastRun>>,
+}
+
+/// Current unix seconds (0 if the clock is before the epoch).
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The risk-summary line: how many apps need attention, from the last run.
+fn tray_risk_text(last: &Option<LastRun>) -> String {
+    match last {
+        None => "Apps: no scan yet".to_string(),
+        Some(r) if !r.ok => "Apps: last scan failed".to_string(),
+        Some(r) => {
+            let flagged = r.risk.warn + r.risk.bad;
+            if flagged == 0 {
+                format!("✓ {} apps — none at risk", r.risk.total)
+            } else if r.risk.bad > 0 {
+                format!("⚠ {flagged} of {} apps at risk ({} high)", r.risk.total, r.risk.bad)
+            } else {
+                format!("⚠ {flagged} of {} apps at risk", r.risk.total)
+            }
+        }
+    }
+}
+
+/// The OS line: whether a system update is warranted. `None` when up to date, so
+/// the caller can grey the item out.
+fn tray_os_text() -> (String, bool) {
+    let info = commands::compute_os_info();
+    if info.outdated {
+        (format!("⚠ System update available — {}", info.display), true)
+    } else {
+        (format!("✓ System up to date — {}", info.display), false)
+    }
+}
+
+/// The reporting line: on/off plus a summary of the last reassessment.
+fn tray_reporting_text(last: &Option<LastRun>) -> String {
+    let cfg = reporting::load();
+    let head = if cfg.enabled && !cfg.collector_url.trim().is_empty() {
+        "Reporting on"
+    } else {
+        "Reporting off"
+    };
+    match last {
+        None => format!("{head} · no check yet"),
+        Some(r) if !r.ok => format!("{head} · last check failed"),
+        Some(r) => {
+            let when = short_time(r.at);
+            let tail = if r.sent {
+                format!("{} sent", r.count)
+            } else {
+                "not sent".to_string()
+            };
+            format!("{head} · {when} · {tail}")
+        }
+    }
+}
+
+/// `HH:MMZ` (UTC) extracted from the shared ISO formatter, for the compact tray
+/// line. `2026-07-15T14:32:07Z` → `14:32Z`.
+fn short_time(unix_secs: u64) -> String {
+    let iso = journal::format_iso(unix_secs);
+    match (iso.find('T'), iso.len()) {
+        (Some(t), _) if iso.len() >= t + 6 => format!("{}Z", &iso[t + 1..t + 6]),
+        _ => iso,
+    }
+}
+
+/// Relabel the tray status item from the current config + last-run state.
+/// Cheap and idempotent; safe to call from any thread that has the `AppHandle`.
+fn refresh_tray_status(app: &AppHandle) {
+    let state = app.state::<TrayStatus>();
+    // Compute all labels up front, then release the locks before touching the
+    // menu (cloning the items out keeps `state`'s borrow from outliving here).
+    let (risk_text, reporting_text) = {
+        let last = state.last.lock().expect("tray status lock");
+        (tray_risk_text(&last), tray_reporting_text(&last))
+    };
+    let (os_text, os_actionable) = tray_os_text();
+
+    let risk_item = state.risk_item.lock().expect("tray item lock").clone();
+    let os_item = state.os_item.lock().expect("tray item lock").clone();
+    let reporting_item = state.reporting_item.lock().expect("tray item lock").clone();
+
+    if let Some(item) = risk_item {
+        let _ = item.set_text(risk_text);
+    }
+    if let Some(item) = os_item {
+        let _ = item.set_text(os_text);
+        // Only clickable (to open update settings) when an update is warranted.
+        let _ = item.set_enabled(os_actionable);
+    }
+    if let Some(item) = reporting_item {
+        let _ = item.set_text(reporting_text);
+    }
+}
+
 /// Run one reassessment, skipping if another is already in flight. This is the
 /// single funnel shared by the scheduler, the tray "Reassess now" item, and the
 /// `reassess_now` command — guaranteeing no overlapping runs.
@@ -51,9 +182,27 @@ pub async fn run_reassessment(app: AppHandle) {
         Ok(permit) => permit,
         Err(_) => return, // a run is already in progress; skip this trigger
     };
-    if let Err(err) = reporting::reassess_and_report(app.clone()).await {
-        eprintln!("reassessment failed: {err}");
-    }
+    let last = match reporting::reassess_and_report(app.clone()).await {
+        Ok(summary) => LastRun {
+            at: now_secs(),
+            count: summary.count,
+            sent: summary.sent,
+            ok: true,
+            risk: summary.risk,
+        },
+        Err(err) => {
+            eprintln!("reassessment failed: {err}");
+            LastRun {
+                at: now_secs(),
+                count: 0,
+                sent: false,
+                ok: false,
+                risk: reporting::RiskSummary::default(),
+            }
+        }
+    };
+    *app.state::<TrayStatus>().last.lock().expect("tray status lock") = Some(last);
+    refresh_tray_status(&app);
 }
 
 pub fn run() {
@@ -69,6 +218,7 @@ pub fn run() {
         ))
         .manage(ReassessGuard::default())
         .manage(NetmonState::default())
+        .manage(TrayStatus::default())
         .setup(|app| {
             setup_tray(app.handle())?;
             reconcile_autostart(app.handle());
@@ -91,15 +241,18 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(15)).await;
                 loop {
+                    // Always run the local assessment so the tray's risky-app
+                    // summary stays current; the POST inside is gated on
+                    // reporting being enabled. When reporting is on we honour the
+                    // configured interval; otherwise we assess on a gentle idle
+                    // cadence purely to refresh the tray.
+                    run_reassessment(handle.clone()).await;
                     let config = reporting::load();
                     let active = config.enabled && !config.collector_url.trim().is_empty();
-                    if active {
-                        run_reassessment(handle.clone()).await;
-                    }
                     let sleep_secs = if active {
                         config.interval_secs.max(60)
                     } else {
-                        300 // idle poll for the enabled flag
+                        1800 // idle tray refresh (30 min)
                     };
                     tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
                 }
@@ -183,33 +336,55 @@ pub fn run() {
 
 /// Build the system tray icon and its Show / Reassess now / Quit menu.
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    // Three live status lines at the top, relabelled after each assessment via
+    // `refresh_tray_status`. The risk line opens the window; the OS line opens
+    // update settings (enabled only when an update is warranted); the reporting
+    // line is a passive label.
+    let (os_text, os_actionable) = tray_os_text();
+    let risk = MenuItem::with_id(app, "risk_show", tray_risk_text(&None), true, None::<&str>)?;
+    let os = MenuItem::with_id(app, "os_update", os_text, os_actionable, None::<&str>)?;
+    let reporting =
+        MenuItem::with_id(app, "reporting_status", tray_reporting_text(&None), false, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let reassess = MenuItem::with_id(app, "reassess", "Reassess now", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &reassess, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&risk, &os, &reporting, &sep, &show, &reassess, &quit],
+    )?;
+
+    // Keep the status items so the scheduler can relabel them later.
+    {
+        let state = app.state::<TrayStatus>();
+        state.risk_item.lock().expect("tray item lock").replace(risk);
+        state.os_item.lock().expect("tray item lock").replace(os);
+        state
+            .reporting_item
+            .lock()
+            .expect("tray item lock")
+            .replace(reporting);
+    }
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // Open the menu on a normal (left) click so the status lines are visible
+        // right away. "Show" / the risk line bring the window up from there.
+        .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
+            // The risk line brings the window up so the user can inspect apps.
+            "show" | "risk_show" => show_main_window(app),
+            "os_update" => {
+                if let Err(err) = commands::open_os_update_settings() {
+                    eprintln!("failed to open OS update settings: {err}");
+                }
+            }
             "reassess" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move { run_reassessment(app).await });
             }
             "quit" => app.exit(0),
             _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            // Left-click the tray icon to bring the window back.
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
-            }
         });
 
     if let Some(icon) = app.default_window_icon().cloned() {

@@ -58,13 +58,22 @@ impl CaptureSource for PcapSource {
         &self,
         filter: PidFilter,
     ) -> Result<(mpsc::Receiver<CapturedEvent>, CaptureHandle), CaptureError> {
+        // Open the capture *before* returning so a privilege failure surfaces as
+        // an error the UI can show (Record → error), rather than a capture thread
+        // that dies silently while the UI sits on a frozen "recording".
+        let (cap, pktap, warning) = open_capture(self.device.as_deref(), self.pktap)?;
+
         let (tx, rx) = mpsc::channel(2048);
         let cancel = CancellationToken::new();
         let pids = super::collect_pids(filter);
-        let device = self.device.clone();
-        let pktap = self.pktap;
         let cancel2 = cancel.clone();
-        std::thread::spawn(move || run_loop(device, pktap, pids, tx, cancel2));
+        std::thread::spawn(move || {
+            // Report a non-fatal fallback (e.g. host-wide capture) before looping.
+            if let Some(w) = warning {
+                let _ = tx.blocking_send(CapturedEvent::Warning(w));
+            }
+            run_loop(cap, pktap, pids, tx, cancel2);
+        });
         Ok((rx, CaptureHandle::new(cancel)))
     }
 }
@@ -102,37 +111,43 @@ fn privilege_hint(err: &pcap::Error) -> String {
     )
 }
 
-fn run_loop(
-    device: Option<String>,
+/// Open a capture, returning `(capture, effective_pktap, fallback_warning)`.
+///
+/// Tries the requested device (pktap = per-app attribution). If that can't be
+/// created (needs root), falls back to the default interface, which only needs
+/// BPF access (ChmodBPF) — capturing host-wide, without a per-PID filter — and
+/// reports that as a non-fatal warning. A total failure is returned as an error
+/// so `start` can reject it and the UI can show it.
+#[allow(clippy::type_complexity)]
+fn open_capture(
+    device: Option<&str>,
     want_pktap: bool,
+) -> Result<(pcap::Capture<pcap::Active>, bool, Option<String>), CaptureError> {
+    match open(device) {
+        Ok(c) => Ok((c, want_pktap, None)),
+        Err(first) if want_pktap => match open(None) {
+            Ok(c) => Ok((
+                c,
+                false,
+                Some(format!(
+                    "per-app capture unavailable ({first}); capturing host-wide on the default \
+                     interface instead (no per-app filter). Grant capture privileges for \
+                     per-application attribution."
+                )),
+            )),
+            Err(e) => Err(CaptureError::Unavailable(privilege_hint(&e))),
+        },
+        Err(e) => Err(CaptureError::Unavailable(privilege_hint(&e))),
+    }
+}
+
+fn run_loop(
+    mut cap: pcap::Capture<pcap::Active>,
+    pktap: bool,
     pids: HashSet<u32>,
     tx: mpsc::Sender<CapturedEvent>,
     cancel: CancellationToken,
 ) {
-    // Try the requested device (pktap = per-app attribution). If that can't be
-    // created (needs root), fall back to the default interface, which only
-    // needs BPF access (ChmodBPF) — capturing host-wide, without per-PID filter.
-    let (mut cap, pktap) = match open(device.as_deref()) {
-        Ok(c) => (c, want_pktap),
-        Err(first) if want_pktap => match open(None) {
-            Ok(c) => {
-                let _ = tx.blocking_send(CapturedEvent::Warning(format!(
-                    "per-app capture unavailable ({first}); capturing host-wide on the default \
-                     interface instead (no per-app filter). Grant capture privileges for \
-                     per-application attribution."
-                )));
-                (c, false)
-            }
-            Err(e) => {
-                let _ = tx.blocking_send(CapturedEvent::Warning(privilege_hint(&e)));
-                return;
-            }
-        },
-        Err(e) => {
-            let _ = tx.blocking_send(CapturedEvent::Warning(privilege_hint(&e)));
-            return;
-        }
-    };
     // A BPF prefilter helps on normal link types; pktap frames carry a header
     // the filter can't parse, so skip it there.
     if !pktap {

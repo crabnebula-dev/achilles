@@ -228,19 +228,77 @@ fn runtimes_of(v: &detect::Versions) -> BTreeMap<String, String> {
     m
 }
 
-/// Discover installed apps and detect each, returning a compact inventory.
-/// Reuses the same discovery + concurrent-detection path the UI scan uses, but
-/// only keeps the lightweight inventory fields. Apps with no identifiable
-/// framework (`Framework::Unknown`) are dropped — they add noise, not signal.
-async fn collect_inventory() -> Result<Vec<AppInventory>, String> {
+/// Version-based risk rating for a detected app. This is the Rust counterpart of
+/// the UI's `versionRisk` heuristic — offline and cheap (no CVE lookups), so it
+/// can run in the background scheduler to keep the tray informed. It only
+/// downgrades frameworks with a defensible version cutoff; everything else is
+/// treated as unremarkable (`Ok`).
+fn version_risk(framework: detect::Framework, v: &detect::Versions) -> Risk {
+    use detect::Framework;
+    let major = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|x| x.split('.').next())
+            .and_then(|m| m.parse::<u32>().ok())
+    };
+    match framework {
+        Framework::Electron => match major(&v.electron) {
+            Some(m) if m < 35 => Risk::Bad,
+            Some(m) if m < 40 => Risk::Warn,
+            _ => Risk::Ok,
+        },
+        Framework::Tauri => match major(&v.tauri) {
+            Some(m) if m < 1 => Risk::Warn,
+            _ => Risk::Ok,
+        },
+        Framework::Cef => match major(&v.cef) {
+            Some(m) if m < 130 => Risk::Warn,
+            _ => Risk::Ok,
+        },
+        _ => Risk::Ok,
+    }
+}
+
+/// A coarse risk rating; only `Warn`/`Bad` count as "needs attention".
+#[derive(Clone, Copy)]
+enum Risk {
+    Ok,
+    Warn,
+    Bad,
+}
+
+/// Tallies risky apps across an inventory run, for the tray summary.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RiskSummary {
+    /// Apps assessed (all detected apps, not just the reported inventory).
+    pub total: usize,
+    /// Apps on a runtime old enough to warrant a look.
+    pub warn: usize,
+    /// Apps on a runtime old enough to be a clear concern.
+    pub bad: usize,
+}
+
+/// Discover installed apps and detect each, returning a compact inventory plus a
+/// version-based [`RiskSummary`] over *every* detected app. Reuses the same
+/// discovery + concurrent-detection path the UI scan uses, but only keeps the
+/// lightweight inventory fields. Apps with no identifiable framework
+/// (`Framework::Unknown`) are dropped from the reported inventory — they add
+/// noise, not signal — but still counted in the risk total.
+async fn collect_inventory() -> Result<(Vec<AppInventory>, RiskSummary), String> {
     let apps = scan::discover_applications().await.map_err(|e| e.to_string())?;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     tokio::spawn(scan::scan(apps, 8, tx));
 
     let mut inventory = Vec::new();
+    let mut risk = RiskSummary::default();
     while let Some(event) = rx.recv().await {
         if let ScanEvent::Detected(detection) = event {
+            risk.total += 1;
+            match version_risk(detection.framework, &detection.versions) {
+                Risk::Warn => risk.warn += 1,
+                Risk::Bad => risk.bad += 1,
+                Risk::Ok => {}
+            }
             if detection.framework == detect::Framework::Unknown {
                 continue;
             }
@@ -253,7 +311,7 @@ async fn collect_inventory() -> Result<Vec<AppInventory>, String> {
             });
         }
     }
-    Ok(inventory)
+    Ok((inventory, risk))
 }
 
 /// POST a report to the collector. Returns `Err` on transport failure or any
@@ -284,7 +342,25 @@ async fn send_report(config: &ReportingConfig, report: &Report) -> Result<(), St
 /// Run a reassessment and report the result. No-op (Ok) when reporting is
 /// disabled or no collector URL is set. Emits a `reassess_status` event so the
 /// UI can show the last-run outcome regardless of whether the window is open.
-pub async fn reassess_and_report(app: AppHandle) -> Result<(), String> {
+///
+/// Outcome of one reassessment, summarised for the caller's tray-status line.
+#[derive(Debug, Clone, Copy)]
+pub struct ReassessSummary {
+    /// Apps in the (reportable) inventory.
+    pub count: usize,
+    /// Whether the inventory was actually POSTed (vs. built-but-not-sent because
+    /// reporting is off/unconfigured).
+    pub sent: bool,
+    /// Version-based risk tally over every detected app.
+    pub risk: RiskSummary,
+}
+
+/// Run a reassessment and report the result. The inventory + risk tally are
+/// always computed (so the tray stays informed); the POST is a no-op when
+/// reporting is disabled or no collector URL is set. Emits a `reassess_status`
+/// event so the UI can show the last-run outcome regardless of whether the
+/// window is open.
+pub async fn reassess_and_report(app: AppHandle) -> Result<ReassessSummary, String> {
     let config = load();
 
     let now = SystemTime::now()
@@ -294,11 +370,11 @@ pub async fn reassess_and_report(app: AppHandle) -> Result<(), String> {
 
     let disabled = !config.enabled || config.collector_url.trim().is_empty();
 
-    let result: Result<usize, String> = async {
-        let inventory = collect_inventory().await?;
+    let result: Result<(usize, RiskSummary), String> = async {
+        let (inventory, risk) = collect_inventory().await?;
         let count = inventory.len();
         if disabled {
-            return Ok(count);
+            return Ok((count, risk));
         }
         let report = Report {
             schema_version: 1,
@@ -309,12 +385,12 @@ pub async fn reassess_and_report(app: AppHandle) -> Result<(), String> {
             apps: inventory,
         };
         send_report(&config, &report).await?;
-        Ok(count)
+        Ok((count, risk))
     }
     .await;
 
     let status = match &result {
-        Ok(count) => ReassessStatus {
+        Ok((count, _)) => ReassessStatus {
             ok: true,
             count: *count,
             skipped: disabled,
@@ -333,7 +409,11 @@ pub async fn reassess_and_report(app: AppHandle) -> Result<(), String> {
     };
     let _ = app.emit("reassess_status", status);
 
-    result.map(|_| ())
+    result.map(|(count, risk)| ReassessSummary {
+        count,
+        sent: !disabled,
+        risk,
+    })
 }
 
 // ---------- trusted-host VDB snapshot ----------
