@@ -19,8 +19,11 @@
 //! * [`metadata`] follows symlinks.
 //!
 //! Alongside the tree, `vfs` carries the [`Platform`] whose application layout
-//! the analysis should assume — the host OS on native, and whatever the browser
-//! was handed on wasm. See [`platform`].
+//! the analysis should assume. It starts at the host OS on native — the desktop
+//! scan, which needs no ceremony — and is settable, because a caller that
+//! unpacks a *distribution artifact* rather than an install is handed a layout
+//! that has nothing to do with the machine reading it. See [`platform`] and
+//! [`with_platform`].
 
 mod platform;
 pub use platform::*;
