@@ -10,8 +10,15 @@
 # static shards the browser loads instead.
 #
 #   scripts/fetch-euvd.sh [OUT_DIR]
+#   scripts/fetch-euvd.sh --list-pairs
 #
 # OUT_DIR defaults to docs/browser/euvd. Requires curl, jq, sha256sum.
+#
+# This is the only thing in CI that talks to EUVD, and it runs from one
+# scheduled workflow (.github/workflows/euvd-refresh.yml). Everything else —
+# the Pages deploy included — reads the snapshot that workflow publishes; see
+# scripts/provision-euvd.sh. `--list-pairs` exists so the workflow reads the
+# runtime list from here instead of keeping its own copy in step.
 #
 # Data: ENISA EUVD, CC BY 4.0 — see the NOTICE written alongside the shards.
 set -euo pipefail
@@ -32,6 +39,7 @@ pairs=(
   "Electron|Electron|electron"
   "Tauri|Tauri|tauri"
   "Node.js|Node.js|node"
+  "Deno|Deno|deno"
   "Google|Chrome|chrome"
   "Google|Flutter|flutter"
   "Qt|Qt|qt"
@@ -40,16 +48,31 @@ pairs=(
   "Oracle|JDK|jdk"
 )
 
-rm -rf "$out"
-mkdir -p "$out"
+if [ "${1:-}" = "--list-pairs" ]; then
+  printf '%s\n' "${pairs[@]}"
+  exit 0
+fi
+
+# Build into a staging directory beside the target and swap it in only once
+# every shard and the manifest are written: a 429 partway through must leave the
+# previous snapshot intact rather than delete it and stop. Staging next to the
+# target keeps the swap on one filesystem.
+parent="$(dirname "$out")"
+mkdir -p "$parent"
+stage="$(mktemp -d "$parent/.euvd-stage.XXXXXX")"
+trap 'rm -rf "$stage"' EXIT
 
 urlenc() { jq -rn --arg s "$1" '$s|@uri'; }
 
 # One GET against the API. EUVD throttles request bursts — a Chrome-sized
 # product paginates ~34 back-to-back requests, enough for a 429 from a shared
-# CI runner IP — so let curl retry transient failures (429 and 5xx qualify)
-# with exponential backoff, honouring a Retry-After header when one is sent.
-euvd_get() { curl -fsS --retry 5 "$1"; }
+# CI runner IP. `--retry-all-errors` is what makes the retry cover a 429 that
+# arrives without a Retry-After header, and the delay floor keeps the backoff
+# from restarting the burst a second later; the cap bounds a run against a
+# genuinely unavailable API.
+euvd_get() {
+  curl -fsS --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 120 "$1"
+}
 
 shards_json="{}"
 
@@ -94,10 +117,10 @@ for entry in "${pairs[@]}"; do
   # keeps correctness independent of GitHub Pages' fixed Cache-Control.
   hash="$(sha256sum "$tmp/shard.json" | cut -d' ' -f1)"
   file="$slug-${hash:0:16}.json"
-  mv "$tmp/shard.json" "$out/$file"
+  mv "$tmp/shard.json" "$stage/$file"
   rm -rf "$tmp"
-  count="$(jq 'length' <"$out/$file")"
-  bytes="$(wc -c <"$out/$file" | tr -d ' ')"
+  count="$(jq 'length' <"$stage/$file")"
+  bytes="$(wc -c <"$stage/$file" | tr -d ' ')"
   echo "euvd: $vendor/$product → $file ($count advisories, $bytes bytes)"
 
   shards_json="$(jq -c \
@@ -140,9 +163,9 @@ jq -n \
     },
     shards: $shards
   }' \
-  >"$out/index.json"
+  >"$stage/index.json"
 
-cat >"$out/NOTICE" <<'NOTICE'
+cat >"$stage/NOTICE" <<'NOTICE'
 Vulnerability data in this directory © European Union Agency for Cybersecurity
 (ENISA), European Vulnerability Database (EUVD), https://euvd.enisa.europa.eu/
 
@@ -152,5 +175,10 @@ Licensed under the Creative Commons Attribution 4.0 International licence
 Modified: reduced to the runtimes Achilles detects and re-serialised to a
 compact per-runtime subset. Not endorsed by ENISA.
 NOTICE
+
+# Everything fetched and written: swap the complete snapshot into place. Up to
+# here a failure has left the previous one untouched.
+rm -rf "$out"
+mv "$stage" "$out"
 
 echo "euvd snapshot → $out (version ${version:0:12}…)"

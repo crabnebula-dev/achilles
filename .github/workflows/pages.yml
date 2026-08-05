@@ -17,6 +17,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read # read the euvd-snapshot artifact the refresh workflow published
 
 # Allow one concurrent deployment; don't cancel an in-progress publish.
 concurrency:
@@ -44,8 +45,20 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-${{ github.job }}-
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      # SKIP_EUVD keeps the deploy off ENISA entirely: it throttles bursts, and a
+      # deploy that re-crawled the API on every push could be taken down by a 429
+      # it had no business making. The snapshot arrives below instead, from what
+      # the refresh workflow published.
       - name: Build the browser demo into docs/browser
+        env:
+          SKIP_EUVD: "1"
         run: ./scripts/build-demo.sh
+      # After the build: build-demo.sh clears docs/browser as it starts, so the
+      # snapshot has to land once the tree it lives in exists.
+      - name: Provision the EUVD snapshot from the refresh workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/provision-euvd.sh docs/browser/euvd
       - uses: actions/configure-pages@v6
         with:
           enablement: true

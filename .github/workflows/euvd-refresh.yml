@@ -1,24 +1,26 @@
 name: Refresh EUVD snapshot
 
-# The browser build ships a pre-fetched EUVD snapshot as a static asset (EUVD
-# blocks browser-origin requests, so the web build can't query it live). EUVD
-# publishes continuously, so this checks hourly whether any runtime Achilles
-# tracks gained or lost advisories and, only then, re-dispatches the Pages
-# deploy — which re-fetches the authoritative data at build time. The snapshot
-# version is a content hash, so an occasional redundant rebuild is harmless
-# (clients see no change); the probe is a best-effort gate on additions.
+# The one place that talks to EUVD. The browser build ships a pre-fetched
+# snapshot as a static asset (EUVD blocks browser-origin requests, so the web
+# build can't query it live), and ENISA throttles bursts — so this workflow
+# fetches, publishes the result as the `euvd-snapshot` artifact, and dispatches
+# the Pages deploy. The deploy reads that artifact through
+# scripts/provision-euvd.sh; nothing outside this workflow contacts ENISA.
 #
-# Note: GitHub only runs `schedule` triggers from the default branch, so the
-# hourly run activates once this lands there. `workflow_dispatch` works from any
-# branch in the meantime.
+# Every six hours it probes the per-runtime totals — one cheap request each — and
+# pays for the full paginated crawl only when a total actually moved. The
+# snapshot version is a content hash, so a redundant refresh is harmless.
+#
+# Note: GitHub only runs `schedule` triggers from the default branch, and only
+# once Actions is enabled in a fork. `workflow_dispatch` works from any branch.
 
 on:
   schedule:
-    - cron: "0 0 * * *" # daily at midnight, off the top of the hour
+    - cron: "17 */6 * * *" # four times a day, off the top of the hour
   workflow_dispatch:
 
-# Least privilege: this only dispatches the deploy workflow. It never writes
-# content, commits, or deploys a page itself.
+# Least privilege: read the previous artifact, publish the new one, dispatch the
+# deploy. It never writes content, commits, or deploys a page itself.
 permissions:
   actions: write
 
@@ -27,54 +29,98 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe EUVD totals against the deployed snapshot
-        id: probe
+      - uses: actions/checkout@v7
+
+      # Cron fires every repository carrying this workflow at the same instant,
+      # and they all point at ENISA. Spread them by an offset derived from the
+      # repository name: different for every fork, identical on every run of one
+      # repository, and needing no stored state. Manual runs skip it — nobody
+      # dispatching by hand should sit through a wait.
+      - name: Stagger this repository's slot
+        if: github.event_name == 'schedule'
         run: |
           set -euo pipefail
-          api="https://euvdservices.enisa.europa.eu/api"
-          owner="${GITHUB_REPOSITORY%%/*}"
-          repo="${GITHUB_REPOSITORY##*/}"
-          base="https://${owner}.github.io/${repo}/browser/euvd"
+          offset=$((0x$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | cut -c1-4) % 1200))
+          echo "waiting ${offset}s so sibling repositories don't fetch in lockstep"
+          sleep "$offset"
 
-          # Previous per-shard counts from the deployed manifest. Absent on the
-          # very first run (no snapshot deployed yet) → refresh to seed it.
-          manifest="$(curl -fsS "$base/index.json" || true)"
-          if [ -z "$manifest" ]; then
-            echo "no deployed snapshot yet → refresh"
+      # The published artifact is the snapshot of record, so it is also the
+      # baseline: the question is whether the cache is stale, not whether the
+      # deployment is. The deployed manifest covers the window before a first
+      # artifact exists; with neither, refresh to seed one.
+      - name: Read the current snapshot's per-shard counts
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow euvd-refresh.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -n "$run" ] && gh run download "$run" --repo "$GITHUB_REPOSITORY" \
+            --name euvd-snapshot --dir "$dir" >/dev/null 2>&1 && [ -s "$dir/index.json" ]; then
+            echo "baseline: the euvd-snapshot artifact from run $run"
+          else
+            base="https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY##*/}/browser/euvd"
+            curl -fsS -o "$dir/index.json" "$base/index.json" 2>/dev/null \
+              && echo "baseline: the deployed snapshot" \
+              || echo "baseline: none"
+          fi
+          if [ -s "$dir/index.json" ]; then
+            echo "manifest=$dir/index.json" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Probe EUVD totals against that baseline
+        id: probe
+        env:
+          MANIFEST: ${{ steps.baseline.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MANIFEST:-}" ]; then
+            echo "no snapshot yet → refresh"
             echo "changed=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # vendor|product|slug — must match scripts/fetch-euvd.sh.
-          pairs=(
-            "Electron|Electron|electron"
-            "Tauri|Tauri|tauri"
-            "Node.js|Node.js|node"
-            "Google|Chrome|chrome"
-            "Google|Flutter|flutter"
-            "Qt|Qt|qt"
-            "nwjs|NW.js|nwjs"
-            "Apple|Safari|safari"
-            "Oracle|JDK|jdk"
-          )
+          api="https://euvdservices.enisa.europa.eu/api"
           changed=false
-          for entry in "${pairs[@]}"; do
-            IFS='|' read -r vendor product slug <<<"$entry"
+          # The runtime list lives in the fetcher; reading it from there is what
+          # keeps the two from drifting apart — that drift is how Deno ended up
+          # dispatched with no shard to answer from.
+          while IFS='|' read -r vendor product slug; do
+            [ -n "${slug:-}" ] || continue
             ev="$(jq -rn --arg s "$vendor" '$s|@uri')"
             ep="$(jq -rn --arg s "$product" '$s|@uri')"
-            total="$(curl -fsS "$api/search?vendor=$ev&product=$ep&size=1&page=0" | jq -r '.total // 0')"
-            prev="$(jq -r --arg s "$slug" '.shards[$s].count // -1' <<<"$manifest")"
+            total="$(curl -fsS --retry 3 --retry-all-errors --retry-delay 2 \
+              "$api/search?vendor=$ev&product=$ep&size=1&page=0" | jq -r '.total // 0')"
+            prev="$(jq -r --arg s "$slug" '.shards[$s].count // -1' "$MANIFEST")"
             if [ "$total" != "$prev" ]; then
               echo "$slug: live total=$total, snapshot count=$prev → stale"
               changed=true
             fi
-          done
+          done < <(./scripts/fetch-euvd.sh --list-pairs)
           echo "changed=$changed" >>"$GITHUB_OUTPUT"
 
-      - name: Dispatch the Pages deploy when the snapshot is stale
+      - name: Fetch the snapshot
+        if: steps.probe.outputs.changed == 'true'
+        run: ./scripts/fetch-euvd.sh "${{ runner.temp }}/euvd"
+
+      # What every other workflow reads. Ninety days is the maximum retention and
+      # a six-hourly refresh keeps it nowhere near expiry; provision-euvd.sh
+      # falls back to the deployed copy if one ever does lapse.
+      - name: Publish the snapshot for the deploy to read
+        if: steps.probe.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: euvd-snapshot
+          path: ${{ runner.temp }}/euvd
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Dispatch the Pages deploy
         if: steps.probe.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
