@@ -5,11 +5,19 @@
 //      installed GUI apps (per-OS) and emits `scan_event` per app.
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
-1
-const { invoke, Channel } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-const { save } = window.__TAURI__.dialog;
-const { writeTextFile } = window.__TAURI__.fs;
+import {
+  invoke,
+  Channel,
+  listen,
+  save,
+  writeTextFile,
+  updater,
+  relaunch,
+  appWindow as platformWindow,
+} from "./platform.js";
+// Lit resolution smoke test — see ach-smoke.js; removed with the first real
+// component in L1.
+import "./ach-smoke.js";
 
 const tbody = document.querySelector("#apps tbody");
 const theadRow = document.querySelector("#apps thead tr");
@@ -2495,9 +2503,6 @@ async function startScan() {
 // ---------- auto-update (CrabNebula Cloud) ----------
 // Checks the configured updater endpoint on boot. If a newer release is found
 // we surface a banner; installing downloads + swaps the bundle and relaunches.
-const updater = window.__TAURI__.updater;
-const { relaunch } = window.__TAURI__.process;
-
 const updateBanner = document.querySelector("#update-banner");
 const updateText = document.querySelector("#update-text");
 const updateInstallBtn = document.querySelector("#update-install");
@@ -2565,7 +2570,7 @@ void checkForUpdates();
 void refreshNvdKeyState();
 
 // Custom window controls for the frameless title bar.
-const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
+const appWindow = platformWindow();
 if (appWindow) {
   document.querySelector("#win-close")?.addEventListener("click", () => void appWindow.close());
   document.querySelector("#win-min")?.addEventListener("click", () => void appWindow.minimize());

@@ -234,8 +234,8 @@ For every discovered app it extracts:
 ## Architecture
 
 ```
-┌─ ui/ ────────────────────────────────┐   vanilla JS, no bundler
-│  index.html + main.js + styles.css   │   listens on scan_event,
+┌─ ui/ ────────────────────────────────┐   ES modules, no bundler
+│  index.html + main.js + styles.scss  │   listens on scan_event,
 └────────────────┬─────────────────────┘   calls invoke() per row click
                  │
 ┌─ src-tauri/ ───▼─────────────────────┐
@@ -276,6 +276,29 @@ time while the browser build picks a layout per upload — a `.app` bundle, a
 Windows install directory, or a Linux app tree, whichever the files look like.
 
 Each crate has an `examples/` binary so you can exercise it in isolation.
+
+### Frontend toolchain
+
+`ui/` is the committed source; servable trees are produced by
+[`web_modules`](https://github.com/gronke/web_modules) — pure Rust, no Node:
+SCSS compiled, npm dependencies from `ui/package.json` vendored into
+`web_modules/`, every bare import validated against the generated map.
+
+```
+cargo install web_modules --features full   # binary: web-modules
+scripts/frontend-dev.sh                     # live-reload dev server on :8080
+scripts/build-web.sh [--release]            # wasm + full tree → dist/
+scripts/build-demo.sh                       # Pages demo → docs/browser/
+cargo tauri dev                             # desktop; builds dist/ first
+```
+
+Dependencies are pinned exactly (vendoring re-resolves ranges; the lock feeds
+`web-modules npm audit` in CI, not the build). The inline import map in
+`ui/index.html` uses relative addresses so one build serves at the Tauri root
+and under the Pages `/browser/` subpath; under desktop Tauri its CSP hash is
+computed at compile time — after editing the map, restart `cargo tauri dev`.
+Import maps set the runtime floor: macOS 13.3 (Safari 16.4-era WKWebView,
+declared in the bundle) and WebKitGTK 2.40 on Linux.
 
 ## Static analysis (the `static-scan` crate)
 

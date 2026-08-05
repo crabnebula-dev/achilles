@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "build": {
-    "beforeDevCommand": "bash scripts/stage-netmon-helper.sh",
-    "beforeBuildCommand": "bash scripts/stage-netmon-helper.sh"
+    "beforeDevCommand": "bash scripts/stage-netmon-helper.sh && bash scripts/frontend-build.sh",
+    "beforeBuildCommand": "bash scripts/stage-netmon-helper.sh && bash scripts/frontend-build.sh"
   },
   "bundle": {
     "externalBin": ["binaries/achilles-netmon-helper"]

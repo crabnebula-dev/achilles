@@ -1,40 +1,46 @@
 #!/usr/bin/env bash
 #
-# Build the browser WASM demo into docs/browser/ — committed static files served
-# by the existing GitHub Pages site (main:/docs) at <pages>/achilles/browser/.
-# No CI/build step on Pages: it serves the committed files directly.
+# Build the browser WASM demo into docs/browser/ — static files served by the
+# existing GitHub Pages site (main:/docs) at <pages>/achilles/browser/.
 #
 #   scripts/build-demo.sh
 #
-# Prerequisites: `rustup target add wasm32-unknown-unknown` and `wasm-pack`.
+# The tree is produced by web-modules (SCSS compiled, npm dependencies
+# vendored, imports validated); a sw-manifest.json listing every file lets the
+# service worker precache the whole shell. Set SKIP_EUVD=1 to skip the EUVD
+# snapshot when iterating offline (the app still loads; EUVD reports "not yet
+# downloaded").
+#
+# Prerequisites: `rustup target add wasm32-unknown-unknown`, `wasm-pack`, and
+# the web-modules CLI (cargo install web_modules --features full).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/docs/browser"
 
 rm -rf "$out"
-mkdir -p "$out"
 
-# Optimised wasm (release + wasm-opt → a few MB, vs ~10 MB debug) into pkg/.
-wasm-pack build "$root/crates/achilles-wasm" --release --target web --out-dir "$out/pkg"
+# Optimised wasm (release + wasm-opt → a few MB, vs ~10 MB debug) into ui/pkg,
+# where the frontend build copies it through to the output tree.
+wasm-pack build "$root/crates/achilles-wasm" --release --no-typescript --target web --out-dir "$root/ui/pkg"
 
-# wasm-pack drops a `pkg/.gitignore` of `*`; remove it so the built artifacts are
-# actually committed (Pages serves committed files). Drop the non-runtime files
-# while we're at it — only the JS glue + .wasm are needed at runtime.
-rm -f "$out/pkg/.gitignore" "$out/pkg/package.json" "$out/pkg/README.md" "$out/pkg"/*.d.ts
+"$root/scripts/frontend-build.sh" "$out"
 
-# The bundler-free UI: copy the static files the demo serves. The app uses only
-# relative URLs, so it runs unchanged under the /browser/ subpath.
-for f in index.html main.js tauri-shim.js styles.css \
-         manifest.webmanifest sw.js euvd-updater.js \
-         icon-192.png icon-512.png icon-maskable.png; do
-  cp "$root/ui/$f" "$out/$f"
-done
+# Precache manifest for sw.js: every built file except the EUVD snapshot (owned
+# by the dedicated achilles-euvd-* cache), dotfiles (the build marker, the
+# vendor cache's .version markers), and the manifest itself.
+(
+  cd "$out"
+  find . -type f \
+    ! -path './euvd/*' \
+    ! -name '.*' \
+    ! -name 'sw-manifest.json' \
+    | sort | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin]))'
+) >"$out/sw-manifest.json"
 
 # Fetch the EUVD snapshot into docs/browser/euvd/ — same-origin static shards
 # the browser reads instead of the CORS-blocked EUVD API. Runs server-side, so
-# no browser Origin → no CORS block. Set SKIP_EUVD=1 to skip when iterating
-# offline (the app still loads; EUVD just reports "not yet downloaded").
+# no browser Origin → no CORS block.
 if [ "${SKIP_EUVD:-}" = "1" ]; then
   echo "skipping EUVD snapshot (SKIP_EUVD=1)"
 else

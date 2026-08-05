@@ -4,7 +4,9 @@
   "version": "0.7.0",
   "identifier": "dev.crabnebula.achilles",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "bash scripts/frontend-build.sh",
+    "beforeBuildCommand": "bash scripts/frontend-build.sh"
   },
   "app": {
     "withGlobalTauri": true,
@@ -40,6 +42,7 @@
       "signCommand": "relic sign --file %1 --key azure --config relic.conf"
     },
     "macOS": {
+      "minimumSystemVersion": "13.3",
       "files": {
         "Library/LaunchDaemons/dev.crabnebula.achilles.netmon.plist": "macos/LaunchDaemons/dev.crabnebula.achilles.netmon.plist"
       }

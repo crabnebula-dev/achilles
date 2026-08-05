@@ -31,6 +31,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+      # Verified prebuilt web-modules binary on PATH; build-demo.sh drives it.
+      - uses: gronke/web_modules@v0.6.0
+        with:
+          build: "false"
       # GitHub-hosted runners ship a stable Rust toolchain; just add the target.
       - run: rustup target add wasm32-unknown-unknown
       - uses: actions/cache@v6

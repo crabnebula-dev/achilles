@@ -33,6 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Verified prebuilt web-modules binary on PATH; the build scripts drive it.
+      - uses: gronke/web_modules@v0.6.0
+        with:
+          build: "false"
       - run: rustup target add wasm32-unknown-unknown
       - uses: actions/cache@v6
         with:
@@ -49,3 +53,5 @@ jobs:
         run: ./scripts/build-web.sh --release
       - name: Type-check the analysis crates for wasm
         run: cargo check --target wasm32-unknown-unknown -p achilles-wasm
+      - name: Audit frontend npm dependencies
+        run: web-modules npm audit ui

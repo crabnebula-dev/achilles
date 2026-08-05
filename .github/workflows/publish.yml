@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: create draft release
         uses: crabnebula-dev/cloud-release@v0
         with:
@@ -38,7 +38,13 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      # Verified prebuilt web-modules binary on PATH — cargo tauri build's
+      # beforeBuildCommand runs scripts/frontend-build.sh, which needs it.
+      - uses: gronke/web_modules@v0.6.0
+        with:
+          build: "false"
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +73,7 @@ jobs:
 
       - id: cache-relic
         if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .go/bin
           key: relic-8.2.0
@@ -147,7 +153,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: publish release
         uses: crabnebula-dev/cloud-release@v0

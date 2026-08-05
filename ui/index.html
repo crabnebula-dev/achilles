@@ -196,6 +196,26 @@
   </main>
   </div>
 
+  <!-- Import map for the vendored npm modules (web_modules/ in the built tree).
+       Addresses are relative so one build serves at the Tauri root AND under the
+       Pages /browser/ subpath. Keys mirror the generated importmap.json — the
+       build validates every bare import against it. Under desktop Tauri the CSP
+       hash for this inline script is computed at compile time: after editing the
+       map, restart `cargo tauri dev`. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@lit/reactive-element": "./web_modules/@lit/reactive-element/reactive-element.js",
+      "@lit/reactive-element/": "./web_modules/@lit/reactive-element/",
+      "lit": "./web_modules/lit/index.js",
+      "lit/": "./web_modules/lit/",
+      "lit-element": "./web_modules/lit-element/index.js",
+      "lit-element/": "./web_modules/lit-element/",
+      "lit-html": "./web_modules/lit-html/lit-html.js",
+      "lit-html/": "./web_modules/lit-html/"
+    }
+  }
+  </script>
   <!-- Web/WASM adapter: installs a `window.__TAURI__` shim in the browser and
        no-ops under the desktop Tauri build. Must precede main.js. -->
   <script type="module" src="./tauri-shim.js"></script>
