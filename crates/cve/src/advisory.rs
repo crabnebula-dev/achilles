@@ -61,8 +61,12 @@ pub struct Advisory {
     pub source: Source,
     pub summary: String,
     pub severity: Option<Severity>,
-    /// First patched version we could infer. Best-effort: multi-range CVEs
-    /// may report the fix from the first applicable range.
+    /// The release that fixes the version that was queried.
+    ///
+    /// An advisory often covers several release lines at once, each with its
+    /// own fix, so this is chosen against the version asked about rather than
+    /// taken from whichever range the record happens to list first. Falls back
+    /// to the first fix in the record when the version is unknown.
     pub fixed_in: Option<String>,
     /// Other identifiers the advisory is known by.
     pub aliases: Vec<String>,
