@@ -23,8 +23,8 @@
     "CSP_GLOBAL_CHECK"
   ],
   "dependencies": [
-    { "name": "lodash", "version": "4.17.20" }
-  ],
+    { "name": "lodash", "version": "4.18.1" }
+  ],              
   "audit": {
     "infoPlist": {
       "allowsArbitraryLoads": true,
