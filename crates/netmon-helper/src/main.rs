@@ -57,7 +57,6 @@ async fn main() {
 async fn serve(stream: tokio::net::UnixStream) {
     use netmon::source::{CapturedEvent, PidFilter};
     use netmon::wire;
-    use tokio::io::AsyncReadExt;
 
     let (mut rd, mut wr) = stream.into_split();
 
@@ -70,7 +69,7 @@ async fn serve(stream: tokio::net::UnixStream) {
     #[cfg(target_os = "macos")]
     let source = netmon::direct_capture_source();
     #[cfg(not(target_os = "macos"))]
-    let source: Box<dyn netmon::CaptureSource> = {
+    let _source: Box<dyn netmon::CaptureSource> = {
         let _ = &filter;
         let _ = wire::write_frame(
             &mut wr,

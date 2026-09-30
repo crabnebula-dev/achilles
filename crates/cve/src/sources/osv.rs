@@ -256,10 +256,7 @@ fn fixed_for(affected: &[Affected], version: Option<&str>) -> Option<String> {
                 let Ok(fixed) = semver::Version::parse(at) else {
                     continue;
                 };
-                // `map_or` rather than `is_none_or`: this crate's MSRV is
-                // 1.80 and the latter is only stable from 1.82.
-                #[allow(clippy::unnecessary_map_or)]
-                let opened = introduced.as_ref().map_or(true, |i| current >= *i);
+                let opened = introduced.as_ref().is_none_or(|i| current >= *i);
                 if opened && current < fixed {
                     return Some(at.to_owned());
                 }

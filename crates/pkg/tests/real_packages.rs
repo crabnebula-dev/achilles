@@ -36,7 +36,10 @@ fn noisy_blob(len: usize) -> Vec<u8> {
 fn source_tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
     files.insert("bin/app".to_string(), noisy_blob(400 * 1024));
-    files.insert("bin/tiny.txt".to_string(), b"small enough to be a fragment\n".to_vec());
+    files.insert(
+        "bin/tiny.txt".to_string(),
+        b"small enough to be a fragment\n".to_vec(),
+    );
     files.insert(
         "share/nested/deep/resources.json".to_string(),
         br#"{"name":"fixture"}"#.to_vec(),
@@ -111,7 +114,9 @@ fn squashfs_images_from_mksquashfs_round_trip_in_every_compression() {
     for compression in ["gzip", "xz", "zstd", "lz4"] {
         let image = dir.join(format!("{compression}.squashfs"));
         let mut cmd = Command::new("mksquashfs");
-        cmd.arg(&src).arg(&image).args(["-comp", compression, "-noappend", "-no-progress"]);
+        cmd.arg(&src)
+            .arg(&image)
+            .args(["-comp", compression, "-noappend", "-no-progress"]);
         // lz4 needs an explicit flag to be accepted as a filesystem compressor.
         if compression == "lz4" {
             cmd.arg("-Xhc");

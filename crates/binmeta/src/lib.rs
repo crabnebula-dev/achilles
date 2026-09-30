@@ -110,7 +110,6 @@ pub fn inspect(path: &Path) -> Result<BinaryMeta, Error> {
     }
 }
 
-
 // --- Mach-O -------------------------------------------------------------
 
 fn mach_arch(macho: &goblin::mach::MachO) -> Arch {
@@ -186,7 +185,12 @@ fn mach_arch(macho: &goblin::mach::MachO) -> Arch {
         })
         .collect();
     // `libs[0]` is a "self" placeholder for the binary itself, not a dependency.
-    let names: Vec<&str> = macho.libs.iter().copied().filter(|l| *l != "self").collect();
+    let names: Vec<&str> = macho
+        .libs
+        .iter()
+        .copied()
+        .filter(|l| *l != "self")
+        .collect();
     let linked_libraries = if names.len() == versions.len() {
         names
             .iter()
@@ -286,7 +290,11 @@ fn elf_arch(elf: &goblin::elf::Elf) -> Arch {
                     || d.info.flags_1 & goblin::elf::dynamic::DF_1_NOW != 0
             })
             .unwrap_or(false);
-        flags.push(if bind_now { "full-RELRO".into() } else { "partial-RELRO".into() });
+        flags.push(if bind_now {
+            "full-RELRO".into()
+        } else {
+            "partial-RELRO".into()
+        });
     }
 
     let sections = elf
@@ -381,7 +389,12 @@ fn pe_arch(pe: &goblin::pe::PE) -> Arch {
 
     Arch {
         arch,
-        kind: if pe.is_lib { "shared-library" } else { "executable" }.into(),
+        kind: if pe.is_lib {
+            "shared-library"
+        } else {
+            "executable"
+        }
+        .into(),
         bits: if pe.is_64 { 64 } else { 32 },
         endianness: "little".into(),
         entry: Some(format!("0x{:x}", pe.entry)),

@@ -37,7 +37,10 @@ pub fn extract_cached_in(file: &Path, cache_root: &Path) -> Result<PathBuf, PkgE
     }
 
     let bytes = fs::read(file)?;
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
     let format = crate::sniff(&bytes, &name).ok_or(PkgError::Unrecognised)?;
 
     // Extract beside the destination so the rename that publishes it stays
@@ -211,7 +214,10 @@ mod tests {
         fs::write(&file, bigger).unwrap();
         let second = extract_cached_in(&file, &cache).unwrap();
 
-        assert_ne!(first, second, "an updated package must not reuse the old tree");
+        assert_ne!(
+            first, second,
+            "an updated package must not reuse the old tree"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

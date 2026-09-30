@@ -65,8 +65,8 @@ impl Default for ReportingConfig {
             vdb_enabled: false,
             vdb_url: String::new(),
             vdb_token: String::new(),
-            vdb_refresh_secs: 86_400,          // daily
-            vdb_max_age_secs: 14 * 86_400,     // two weeks
+            vdb_refresh_secs: 86_400,      // daily
+            vdb_max_age_secs: 14 * 86_400, // two weeks
         }
     }
 }
@@ -284,7 +284,9 @@ pub struct RiskSummary {
 /// (`Framework::Unknown`) are dropped from the reported inventory — they add
 /// noise, not signal — but still counted in the risk total.
 async fn collect_inventory() -> Result<(Vec<AppInventory>, RiskSummary), String> {
-    let apps = scan::discover_applications().await.map_err(|e| e.to_string())?;
+    let apps = scan::discover_applications()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     tokio::spawn(scan::scan(apps, 8, tx));
@@ -421,7 +423,11 @@ pub async fn reassess_and_report(app: AppHandle) -> Result<ReassessSummary, Stri
 /// On-disk snapshot path. Must match the reader in `cve::sources::snapshot`
 /// (`<cache-dir>/achilles/vdb-snapshot.json`).
 fn vdb_snapshot_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("achilles").join("vdb-snapshot.json"))
+    Some(
+        dirs::cache_dir()?
+            .join("achilles")
+            .join("vdb-snapshot.json"),
+    )
 }
 
 /// Status pushed to the frontend after a VDB refresh attempt.

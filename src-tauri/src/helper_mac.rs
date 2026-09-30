@@ -77,7 +77,8 @@ pub fn uninstall() -> Result<(), String> {
     if status == SMAppServiceStatus::NotRegistered || status == SMAppServiceStatus::NotFound {
         return Ok(());
     }
-    unsafe { service().unregisterAndReturnError() }.map_err(|e| e.localizedDescription().to_string())
+    unsafe { service().unregisterAndReturnError() }
+        .map_err(|e| e.localizedDescription().to_string())
 }
 
 /// Open System Settings → General → Login Items & Extensions for approval.

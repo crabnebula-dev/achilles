@@ -57,8 +57,7 @@ pub fn scan_electron_version(binary_path: &Path) -> std::io::Result<Option<Strin
 /// Deno bakes into its HTTP client's user-agent string. Like `Chrome/` and
 /// `Electron/`, this literal is stable and distinctive, so it serves as both
 /// the presence marker and the version for a Deno-desktop binary.
-static DENO_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Deno/(\d+\.\d+\.\d+)").unwrap());
+static DENO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Deno/(\d+\.\d+\.\d+)").unwrap());
 
 /// Scan a Tauri main binary for the Tauri crate version.
 pub fn scan_tauri_version(binary_path: &Path) -> std::io::Result<Option<String>> {

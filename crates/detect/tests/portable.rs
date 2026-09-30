@@ -92,10 +92,15 @@ fn an_electron_appimage_is_expanded_and_detected() {
     // the payload search picks the app out of a whole tree, so it checks that a
     // candidate really is a binary rather than a script or a data file.
     let mut binary = b"\x7fELF".to_vec();
-    binary
-        .extend_from_slice(b"...Chrome/120.0.6099.109 ...Electron/28.1.0 ...node-v18.18.2/node.tar.gz...");
+    binary.extend_from_slice(
+        b"...Chrome/120.0.6099.109 ...Electron/28.1.0 ...node-v18.18.2/node.tar.gz...",
+    );
     fs::write(payload.join("electron-sample"), &binary).unwrap();
-    fs::write(payload.join("AppRun"), b"#!/bin/sh\nexec ./electron-sample\n").unwrap();
+    fs::write(
+        payload.join("AppRun"),
+        b"#!/bin/sh\nexec ./electron-sample\n",
+    )
+    .unwrap();
 
     let image = base.join("payload.squashfs");
     let built = Command::new("mksquashfs")

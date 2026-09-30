@@ -69,7 +69,11 @@ impl Codec {
 /// `expected` is the output size when the container knows it (squashfs blocks
 /// do). It sizes the buffer up front, and for [`Codec::Lz4Block`] — a raw block
 /// with no framing — it is *required*, since the format carries no length.
-pub fn decompress(codec: Codec, input: &[u8], expected: Option<usize>) -> Result<Vec<u8>, PkgError> {
+pub fn decompress(
+    codec: Codec,
+    input: &[u8],
+    expected: Option<usize>,
+) -> Result<Vec<u8>, PkgError> {
     let mut out = Vec::with_capacity(expected.unwrap_or(input.len() * 3).min(64 << 20));
     match codec {
         Codec::None => out.extend_from_slice(input),

@@ -383,10 +383,7 @@ mod tests {
 
     /// Build a flatpak-shaped `files/` tree in a temp dir.
     fn flatpak_files(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "scan-flatpak-{}-{name}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("scan-flatpak-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         dir
@@ -412,7 +409,10 @@ mod tests {
         // The premise: from the host, that link points at nothing.
         assert!(!entry.exists(), "the link should be dangling on the host");
 
-        assert_eq!(resolve_entry(&entry, &files, 0).as_deref(), Some(real.as_path()));
+        assert_eq!(
+            resolve_entry(&entry, &files, 0).as_deref(),
+            Some(real.as_path())
+        );
         let _ = std::fs::remove_dir_all(&files);
     }
 
@@ -426,9 +426,16 @@ mod tests {
         std::fs::write(&real, b"\x7fELF").unwrap();
 
         let entry = files.join("bin/spotify");
-        std::fs::write(&entry, b"#!/bin/sh\nexec /app/extra/Spotify/spotify \"$@\"\n").unwrap();
+        std::fs::write(
+            &entry,
+            b"#!/bin/sh\nexec /app/extra/Spotify/spotify \"$@\"\n",
+        )
+        .unwrap();
 
-        assert_eq!(resolve_entry(&entry, &files, 0).as_deref(), Some(real.as_path()));
+        assert_eq!(
+            resolve_entry(&entry, &files, 0).as_deref(),
+            Some(real.as_path())
+        );
         let _ = std::fs::remove_dir_all(&files);
     }
 
@@ -437,11 +444,20 @@ mod tests {
     /// first would vanish from the scan.
     #[test]
     fn identity_is_the_payload_never_the_shared_runner() {
-        let a = describe(PathBuf::from("/f/app/A/files"), Some("/f/app/A/files/bin/a".into()));
-        let b = describe(PathBuf::from("/f/app/B/files"), Some("/f/app/B/files/bin/b".into()));
+        let a = describe(
+            PathBuf::from("/f/app/A/files"),
+            Some("/f/app/A/files/bin/a".into()),
+        );
+        let b = describe(
+            PathBuf::from("/f/app/B/files"),
+            Some("/f/app/B/files/bin/b".into()),
+        );
         assert_ne!(a.path, b.path);
         assert_eq!(a.root, Path::new("/f/app/A/files/bin"));
-        assert_eq!(a.executable.as_deref(), Some(Path::new("/f/app/A/files/bin/a")));
+        assert_eq!(
+            a.executable.as_deref(),
+            Some(Path::new("/f/app/A/files/bin/a"))
+        );
     }
 
     /// An app with no native binary (GJS, Python) still gets a distinct

@@ -149,7 +149,7 @@ mod macos {
                 .unwrap_or_else(|| name.into_owned());
             if best
                 .as_deref()
-                .map_or(true, |b| cmp_version(&version, b).is_gt())
+                .is_none_or(|b| cmp_version(&version, b).is_gt())
             {
                 best = Some(version);
             }

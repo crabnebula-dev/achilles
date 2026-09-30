@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WindowEvent, Wry};
-use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 /// Serialises reassessment runs so the scheduler, tray, and manual command can
 /// never overlap. Held as Tauri-managed state.
@@ -96,7 +96,10 @@ fn tray_risk_text(last: &Option<LastRun>) -> String {
             if flagged == 0 {
                 format!("✓ {} apps — none at risk", r.risk.total)
             } else if r.risk.bad > 0 {
-                format!("⚠ {flagged} of {} apps at risk ({} high)", r.risk.total, r.risk.bad)
+                format!(
+                    "⚠ {flagged} of {} apps at risk ({} high)",
+                    r.risk.total, r.risk.bad
+                )
             } else {
                 format!("⚠ {flagged} of {} apps at risk", r.risk.total)
             }
@@ -109,7 +112,10 @@ fn tray_risk_text(last: &Option<LastRun>) -> String {
 fn tray_os_text() -> (String, bool) {
     let info = commands::compute_os_info();
     if info.outdated {
-        (format!("⚠ System update available — {}", info.display), true)
+        (
+            format!("⚠ System update available — {}", info.display),
+            true,
+        )
     } else {
         (format!("✓ System up to date — {}", info.display), false)
     }
@@ -205,7 +211,10 @@ pub async fn run_reassessment(app: AppHandle) {
             }
         }
     };
-    *app.state::<TrayStatus>().last.lock().expect("tray status lock") = Some(last);
+    *app.state::<TrayStatus>()
+        .last
+        .lock()
+        .expect("tray status lock") = Some(last);
     refresh_tray_status(&app);
 }
 
@@ -355,8 +364,13 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let (os_text, os_actionable) = tray_os_text();
     let risk = MenuItem::with_id(app, "risk_show", tray_risk_text(&None), true, None::<&str>)?;
     let os = MenuItem::with_id(app, "os_update", os_text, os_actionable, None::<&str>)?;
-    let reporting =
-        MenuItem::with_id(app, "reporting_status", tray_reporting_text(&None), false, None::<&str>)?;
+    let reporting = MenuItem::with_id(
+        app,
+        "reporting_status",
+        tray_reporting_text(&None),
+        false,
+        None::<&str>,
+    )?;
     let sep = PredefinedMenuItem::separator(app)?;
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let reassess = MenuItem::with_id(app, "reassess", "Reassess now", true, None::<&str>)?;
@@ -369,7 +383,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     // Keep the status items so the scheduler can relabel them later.
     {
         let state = app.state::<TrayStatus>();
-        state.risk_item.lock().expect("tray item lock").replace(risk);
+        state
+            .risk_item
+            .lock()
+            .expect("tray item lock")
+            .replace(risk);
         state.os_item.lock().expect("tray item lock").replace(os);
         state
             .reporting_item

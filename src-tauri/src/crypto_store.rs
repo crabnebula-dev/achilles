@@ -7,9 +7,8 @@
 use std::path::{Path, PathBuf};
 
 fn store_dir() -> std::io::Result<PathBuf> {
-    let base = dirs::data_dir().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no data directory")
-    })?;
+    let base = dirs::data_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no data directory"))?;
     let dir = base.join("achilles").join("crypto");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
@@ -44,7 +43,11 @@ fn slug(path: &str, bundle_id: Option<&str>) -> String {
 }
 
 fn file_for(path: &str, bundle_id: Option<&str>) -> Option<PathBuf> {
-    Some(store_dir().ok()?.join(format!("{}.json", slug(path, bundle_id))))
+    Some(
+        store_dir()
+            .ok()?
+            .join(format!("{}.json", slug(path, bundle_id))),
+    )
 }
 
 /// Persist the inventory for an app (best-effort; failures are ignored).

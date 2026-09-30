@@ -43,7 +43,10 @@ const MARKERS: &[(&[u8], Marker)] = &[
     (b"EVP_aes_128_gcm", Marker::Algorithm("aes-128-gcm")),
     (b"EVP_aes_256", Marker::Algorithm("aes-256")),
     (b"EVP_aes_128", Marker::Algorithm("aes-128")),
-    (b"EVP_chacha20_poly1305", Marker::Algorithm("chacha20-poly1305")),
+    (
+        b"EVP_chacha20_poly1305",
+        Marker::Algorithm("chacha20-poly1305"),
+    ),
     (b"chacha20_poly1305", Marker::Algorithm("chacha20-poly1305")),
     (b"EVP_sha256", Marker::Algorithm("sha256")),
     (b"SHA256_Init", Marker::Algorithm("sha256")),
@@ -104,8 +107,10 @@ fn crypto_library_from_name(name: &str) -> Option<&'static str> {
 /// Group 1 = product, group 2 = version. Requiring the version disambiguates a
 /// real library from an incidental name mention.
 static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(OpenSSL|LibreSSL|libsodium|mbed TLS|GnuTLS|wolfSSL)[ /]v?(\d+\.\d+(?:\.\d+)?[a-z]?)")
-        .unwrap()
+    Regex::new(
+        r"(OpenSSL|LibreSSL|libsodium|mbed TLS|GnuTLS|wolfSSL)[ /]v?(\d+\.\d+(?:\.\d+)?[a-z]?)",
+    )
+    .unwrap()
 });
 
 /// Canonical library name for a `VERSION_RE` product capture.
@@ -239,8 +244,9 @@ fn candidate_binaries(root: &Path) -> Vec<PathBuf> {
                 continue;
             };
             let lower = name.to_ascii_lowercase();
-            let crypto_lib = (lower.ends_with(".dylib") || lower.ends_with(".so") || lower.ends_with(".dll"))
-                && crypto_library_from_name(&lower).is_some();
+            let crypto_lib =
+                (lower.ends_with(".dylib") || lower.ends_with(".so") || lower.ends_with(".dll"))
+                    && crypto_library_from_name(&lower).is_some();
             if crypto_lib || is_framework_main(&path, name) {
                 out.push(path);
             }
@@ -291,12 +297,12 @@ mod tests {
             matches!(e, CryptoEvidence::Library { name, version, .. }
                 if name == "OpenSSL" && version.as_deref() == Some("3.3.1"))
         });
-        let has_aes = ev.iter().any(|e| {
-            matches!(e, CryptoEvidence::Algorithm { name, .. } if name == "aes-256-gcm")
-        });
-        let has_ecdsa = ev.iter().any(|e| {
-            matches!(e, CryptoEvidence::Algorithm { name, .. } if name == "ecdsa")
-        });
+        let has_aes = ev
+            .iter()
+            .any(|e| matches!(e, CryptoEvidence::Algorithm { name, .. } if name == "aes-256-gcm"));
+        let has_ecdsa = ev
+            .iter()
+            .any(|e| matches!(e, CryptoEvidence::Algorithm { name, .. } if name == "ecdsa"));
         assert!(has_lib, "OpenSSL 3.3.1 library evidence");
         assert!(has_aes, "AES-256-GCM algorithm evidence");
         assert!(has_ecdsa, "ECDSA algorithm evidence");

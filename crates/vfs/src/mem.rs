@@ -193,13 +193,11 @@ pub fn read_dir(path: impl AsRef<Path>) -> io::Result<ReadDir> {
             let dir = tree.resolve(path, 0).ok_or_else(|| not_found(path))?;
             match tree.nodes.get(&dir) {
                 Some(Node::Dir) => {}
-                // `ErrorKind::NotADirectory` is only stable since 1.83; the
-                // workspace MSRV is 1.80, so use a generic error with a message.
                 _ => {
-                    return Err(io::Error::other(format!(
-                        "vfs: not a directory: {}",
-                        path.display()
-                    )))
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotADirectory,
+                        format!("vfs: not a directory: {}", path.display()),
+                    ))
                 }
             }
             let entries: Vec<DirEntry> = tree

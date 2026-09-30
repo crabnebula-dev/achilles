@@ -102,11 +102,16 @@ const DLT_PKTAP_VALUES: [i32; 2] = [149, 258];
 // invoke it on the raw handle. The symbol lives in the libpcap the crate links.
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn pcap_set_want_pktap(p: *mut std::ffi::c_void, want: std::os::raw::c_int)
-        -> std::os::raw::c_int;
+    fn pcap_set_want_pktap(
+        p: *mut std::ffi::c_void,
+        want: std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
 }
 
-fn open(device: Option<&str>, want_pktap: bool) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
+fn open(
+    device: Option<&str>,
+    want_pktap: bool,
+) -> Result<pcap::Capture<pcap::Active>, pcap::Error> {
     let inactive = match device {
         Some(d) => pcap::Capture::from_device(d)?,
         None => {
@@ -301,11 +306,11 @@ fn run_loop(
 
 fn map_datalink(dlt: pcap::Linktype) -> Option<LinkType> {
     match dlt.0 {
-        1 => Some(LinkType::Ethernet),      // DLT_EN10MB
-        0 | 108 => Some(LinkType::Null),    // DLT_NULL / DLT_LOOP (BSD loopback, utun/VPN)
-        12 | 14 => Some(LinkType::RawIp),   // DLT_RAW
-        113 => Some(LinkType::LinuxSll),    // DLT_LINUX_SLL
-        _ => None,                          // other exotic link types — skipped for now
+        1 => Some(LinkType::Ethernet),    // DLT_EN10MB
+        0 | 108 => Some(LinkType::Null),  // DLT_NULL / DLT_LOOP (BSD loopback, utun/VPN)
+        12 | 14 => Some(LinkType::RawIp), // DLT_RAW
+        113 => Some(LinkType::LinuxSll),  // DLT_LINUX_SLL
+        _ => None,                        // other exotic link types — skipped for now
     }
 }
 
