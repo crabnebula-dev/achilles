@@ -245,7 +245,8 @@ pub(crate) fn format_iso(unix_secs: u64) -> String {
     let mut year = 1970u32;
     let mut days_remaining = days_since_epoch as i64;
     loop {
-        let is_leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+        let is_leap =
+            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
         let yr_days = if is_leap { 366 } else { 365 };
         if days_remaining < yr_days as i64 {
             break;

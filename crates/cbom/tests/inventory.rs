@@ -59,11 +59,23 @@ fn cipher_suite_decomposes_into_classified_primitives() {
     }
 
     // ECDHE + RSA are quantum-vulnerable (NIST level 0); AES-128 is acceptable.
-    assert_eq!(by_ref("crypto/algorithm/ecdhe").unwrap().assessment, QuantumAssessment::QuantumVulnerable);
+    assert_eq!(
+        by_ref("crypto/algorithm/ecdhe").unwrap().assessment,
+        QuantumAssessment::QuantumVulnerable
+    );
     assert_eq!(by_ref("crypto/algorithm/ecdhe").unwrap().nist_level, 0);
-    assert_eq!(by_ref("crypto/algorithm/rsa").unwrap().assessment, QuantumAssessment::QuantumVulnerable);
-    assert_eq!(by_ref("crypto/algorithm/aes-128-gcm").unwrap().assessment, QuantumAssessment::Acceptable);
-    assert_eq!(by_ref("crypto/algorithm/aes-128-gcm").unwrap().nist_level, 1);
+    assert_eq!(
+        by_ref("crypto/algorithm/rsa").unwrap().assessment,
+        QuantumAssessment::QuantumVulnerable
+    );
+    assert_eq!(
+        by_ref("crypto/algorithm/aes-128-gcm").unwrap().assessment,
+        QuantumAssessment::Acceptable
+    );
+    assert_eq!(
+        by_ref("crypto/algorithm/aes-128-gcm").unwrap().nist_level,
+        1
+    );
 
     // x25519 group + TLS 1.2 protocol + OpenSSL library are all present.
     assert!(by_ref("crypto/algorithm/x25519").is_some());
@@ -98,7 +110,10 @@ fn exports_valid_cyclonedx_cbom() {
         .expect("ecdhe component");
     assert_eq!(ecdhe["type"], "cryptographic-asset");
     assert_eq!(ecdhe["cryptoProperties"]["assetType"], "algorithm");
-    assert_eq!(ecdhe["cryptoProperties"]["algorithmProperties"]["primitive"], "key-agree");
+    assert_eq!(
+        ecdhe["cryptoProperties"]["algorithmProperties"]["primitive"],
+        "key-agree"
+    );
     assert_eq!(
         ecdhe["cryptoProperties"]["algorithmProperties"]["nistQuantumSecurityLevel"],
         0
@@ -109,7 +124,10 @@ fn exports_valid_cyclonedx_cbom() {
         .iter()
         .find(|c| c["cryptoProperties"]["assetType"] == "protocol")
         .expect("protocol component");
-    assert_eq!(proto["cryptoProperties"]["protocolProperties"]["type"], "tls");
+    assert_eq!(
+        proto["cryptoProperties"]["protocolProperties"]["type"],
+        "tls"
+    );
 
     // OpenSSL is a library component (not a crypto-asset).
     let lib = comps
@@ -128,7 +146,10 @@ fn exports_valid_cyclonedx_cbom() {
         .unwrap()
         .iter()
         .any(|r| r == "crypto/protocol/tls-1.2"));
-    let proto_dep = deps.iter().find(|d| d["ref"] == "crypto/protocol/tls-1.2").unwrap();
+    let proto_dep = deps
+        .iter()
+        .find(|d| d["ref"] == "crypto/protocol/tls-1.2")
+        .unwrap();
     assert!(proto_dep["dependsOn"]
         .as_array()
         .unwrap()

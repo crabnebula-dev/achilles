@@ -124,7 +124,10 @@ fn treats_a_picked_bundle_as_the_app() {
 #[test]
 fn finds_a_bundle_nested_below_the_picked_root() {
     let base = tempdir("find-nested");
-    write(&base.join("Apps/Signal.app/Contents/Info.plist"), b"<plist/>");
+    write(
+        &base.join("Apps/Signal.app/Contents/Info.plist"),
+        b"<plist/>",
+    );
 
     let app = find_app(&base, Platform::Macos).expect("nested bundle should be found");
     assert_eq!(app.root, base.join("Apps/Signal.app"));
@@ -287,7 +290,10 @@ fn payload_search_prefers_the_application_over_the_usr_bin_launcher() {
     write(&base.join("usr/bin/foo"), &elf(2048));
     write(&base.join("opt/Foo/foo"), &elf(200_000));
     write(&base.join("opt/Foo/libffmpeg.so"), &elf(400_000));
-    write(&base.join("usr/share/applications/foo.desktop"), b"[Desktop Entry]");
+    write(
+        &base.join("usr/share/applications/foo.desktop"),
+        b"[Desktop Entry]",
+    );
 
     let app = find_app_in_payload(&base).expect("app should be found");
     assert_eq!(app.root, base.join("opt/Foo"));

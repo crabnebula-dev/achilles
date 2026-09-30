@@ -176,7 +176,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(elsewhere, (DEFAULT, Platform::Linux));
-        assert_eq!(platform(), Platform::Windows, "the other thread's set leaked");
+        assert_eq!(
+            platform(),
+            Platform::Windows,
+            "the other thread's set leaked"
+        );
         reset_platform();
     }
 

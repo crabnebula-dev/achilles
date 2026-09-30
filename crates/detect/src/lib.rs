@@ -44,8 +44,8 @@ mod system_webview;
 mod tauri;
 mod wails;
 
-pub use app::{is_app_binary, payload_executable, payload_name, DiscoveredApp};
 use app::Layout;
+pub use app::{is_app_binary, payload_executable, payload_name, DiscoveredApp};
 pub use bundle::BundleInfo;
 
 /// Read and parse a property list through [`vfs`] (so it works against the real

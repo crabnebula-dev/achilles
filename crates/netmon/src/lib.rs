@@ -15,9 +15,9 @@ pub mod model;
 pub mod source;
 pub mod wire;
 
-pub use backends::{capture_available, default_source, helper_reachable, list_processes};
 #[cfg(target_os = "macos")]
 pub use backends::direct_capture_source;
+pub use backends::{capture_available, default_source, helper_reachable, list_processes};
 pub use engine::Session;
 pub use model::{
     Destination, L7Kind, RunningProcess, SessionDelta, SessionMeta, SessionReport, TargetProcess,

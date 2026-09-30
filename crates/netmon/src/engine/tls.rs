@@ -61,7 +61,12 @@ impl<'a> Reader<'a> {
         if self.remaining() < 3 {
             return None;
         }
-        let v = u32::from_be_bytes([0, self.b[self.pos], self.b[self.pos + 1], self.b[self.pos + 2]]);
+        let v = u32::from_be_bytes([
+            0,
+            self.b[self.pos],
+            self.b[self.pos + 1],
+            self.b[self.pos + 2],
+        ]);
         self.pos += 3;
         Some(v)
     }
@@ -140,7 +145,9 @@ fn parse_extensions(ext: &[u8], ch: &mut ClientHello) {
     while r.remaining() >= 4 {
         let Some(ext_type) = r.u16() else { break };
         let Some(len) = r.u16() else { break };
-        let Some(body) = r.take(len as usize) else { break };
+        let Some(body) = r.take(len as usize) else {
+            break;
+        };
         if !is_grease(ext_type) {
             ch.ext_types.push(ext_type);
         }
@@ -165,7 +172,9 @@ fn parse_u16_list(body: &[u8], strip_grease: bool) -> Vec<u16> {
     let Some(list) = r.take(list_len as usize) else {
         return Vec::new();
     };
-    list.as_chunks::<2>().0.iter()
+    list.as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| u16::from_be_bytes([p[0], p[1]]))
         .filter(|v| !strip_grease || !is_grease(*v))
         .collect()
@@ -180,7 +189,9 @@ fn parse_u16_list_u8len(body: &[u8]) -> Vec<u16> {
     let Some(list) = r.take(list_len as usize) else {
         return Vec::new();
     };
-    list.as_chunks::<2>().0.iter()
+    list.as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| u16::from_be_bytes([p[0], p[1]]))
         .filter(|v| !is_grease(*v))
         .collect()
@@ -235,7 +246,9 @@ fn parse_server_hello(b: &[u8]) -> Option<ServerHello> {
         while er.remaining() >= 4 {
             let Some(t) = er.u16() else { break };
             let Some(len) = er.u16() else { break };
-            let Some(body) = er.take(len as usize) else { break };
+            let Some(body) = er.take(len as usize) else {
+                break;
+            };
             if t == 0x002b && body.len() >= 2 {
                 sh.supported_version = Some(u16::from_be_bytes([body[0], body[1]]));
             }
@@ -246,7 +259,12 @@ fn parse_server_hello(b: &[u8]) -> Option<ServerHello> {
 
 /// Compute the JA3 fingerprint (raw decimal string + md5 hex) from a ClientHello.
 pub fn ja3(ch: &ClientHello) -> (String, String) {
-    let join = |v: &[u16]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("-");
+    let join = |v: &[u16]| {
+        v.iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
     let point_fmts = ch
         .point_formats
         .iter()

@@ -68,7 +68,9 @@ pub(crate) fn build(app: AppRef, evidence: &[CryptoEvidence]) -> CryptoInventory
         let prov = ev.provenance();
         let loc = ev.location();
         match ev {
-            CryptoEvidence::Protocol { family, version, .. } => {
+            CryptoEvidence::Protocol {
+                family, version, ..
+            } => {
                 let c = normalize::protocol(*family, version.as_deref());
                 protocols.insert(upsert(&mut assets, &c, prov, loc));
             }
@@ -113,46 +115,54 @@ pub(crate) fn build(app: AppRef, evidence: &[CryptoEvidence]) -> CryptoInventory
             } => {
                 // A certificate asset plus links to its sig + key algorithms.
                 let mut algo_refs = Vec::new();
-                if let Some(s) = signature_algorithm.as_deref().and_then(normalize::named_algorithm) {
+                if let Some(s) = signature_algorithm
+                    .as_deref()
+                    .and_then(normalize::named_algorithm)
+                {
                     algo_refs.push(upsert(&mut assets, &s, prov, loc));
                 }
-                if let Some(k) = public_key_algorithm.as_deref().and_then(normalize::named_algorithm) {
+                if let Some(k) = public_key_algorithm
+                    .as_deref()
+                    .and_then(normalize::named_algorithm)
+                {
                     algo_refs.push(upsert(&mut assets, &k, prov, loc));
                 }
                 let cert_ref = format!(
                     "crypto/certificate/{}",
                     slug(subject.as_deref().or(issuer.as_deref()).unwrap_or("cert"))
                 );
-                let a = assets.entry(cert_ref.clone()).or_insert_with(|| CryptoAsset {
-                    bom_ref: cert_ref.clone(),
-                    asset_type: AssetType::Certificate,
-                    name: subject.clone().unwrap_or_else(|| "certificate".into()),
-                    oid: None,
-                    primitive: None,
-                    parameter: None,
-                    crypto_functions: vec![],
-                    assessment: if *self_signed {
-                        QuantumAssessment::Weak
-                    } else {
-                        QuantumAssessment::NotApplicable
-                    },
-                    nist_level: 0,
-                    deprecated: false,
-                    provenance: BTreeSet::new(),
-                    occurrences: 0,
-                    locations: BTreeSet::new(),
-                    protocol: None,
-                    certificate: Some(CertSummary {
-                        subject: subject.clone(),
-                        issuer: issuer.clone(),
-                        not_before: *not_before,
-                        not_after: *not_after,
-                        self_signed: *self_signed,
-                        signature_algorithm: signature_algorithm.clone(),
-                        public_key_algorithm: public_key_algorithm.clone(),
-                    }),
-                    library_version: None,
-                });
+                let a = assets
+                    .entry(cert_ref.clone())
+                    .or_insert_with(|| CryptoAsset {
+                        bom_ref: cert_ref.clone(),
+                        asset_type: AssetType::Certificate,
+                        name: subject.clone().unwrap_or_else(|| "certificate".into()),
+                        oid: None,
+                        primitive: None,
+                        parameter: None,
+                        crypto_functions: vec![],
+                        assessment: if *self_signed {
+                            QuantumAssessment::Weak
+                        } else {
+                            QuantumAssessment::NotApplicable
+                        },
+                        nist_level: 0,
+                        deprecated: false,
+                        provenance: BTreeSet::new(),
+                        occurrences: 0,
+                        locations: BTreeSet::new(),
+                        protocol: None,
+                        certificate: Some(CertSummary {
+                            subject: subject.clone(),
+                            issuer: issuer.clone(),
+                            not_before: *not_before,
+                            not_after: *not_after,
+                            self_signed: *self_signed,
+                            signature_algorithm: signature_algorithm.clone(),
+                            public_key_algorithm: public_key_algorithm.clone(),
+                        }),
+                        library_version: None,
+                    });
                 a.occurrences += 1;
                 a.provenance.insert(prov);
                 if let Some(l) = loc {

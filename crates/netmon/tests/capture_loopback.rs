@@ -63,7 +63,8 @@ fn captures_our_own_loopback_clienthello() {
     thread::sleep(Duration::from_millis(300));
     {
         let mut c = TcpStream::connect(("127.0.0.1", PORT)).expect("connect");
-        c.write_all(&client_hello_record()).expect("send ClientHello");
+        c.write_all(&client_hello_record())
+            .expect("send ClientHello");
         c.flush().ok();
         // Hold the socket open briefly so the segment flushes before FIN.
         thread::sleep(Duration::from_millis(100));

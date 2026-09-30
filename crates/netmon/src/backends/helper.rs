@@ -9,9 +9,7 @@ use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::source::{
-    CaptureError, CaptureHandle, CaptureSource, CapturedEvent, PidFilter,
-};
+use crate::source::{CaptureError, CaptureHandle, CaptureSource, CapturedEvent, PidFilter};
 use crate::wire;
 
 pub struct HelperSource;
@@ -28,7 +26,9 @@ impl CaptureSource for HelperSource {
     ) -> Result<(mpsc::Receiver<CapturedEvent>, CaptureHandle), CaptureError> {
         let stream = UnixStream::connect(wire::HELPER_SOCKET_PATH)
             .await
-            .map_err(|e| CaptureError::Unavailable(format!("privileged helper not reachable: {e}")))?;
+            .map_err(|e| {
+                CaptureError::Unavailable(format!("privileged helper not reachable: {e}"))
+            })?;
         let (mut rd, mut wr) = stream.into_split();
 
         // Tell the helper which process to capture.

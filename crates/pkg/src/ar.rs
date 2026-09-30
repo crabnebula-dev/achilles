@@ -66,7 +66,11 @@ fn members(bytes: &[u8]) -> impl Iterator<Item = Member<'_>> {
             // GNU appends `/` to member names to allow trailing spaces.
             .trim_end_matches('/')
             .to_string();
-        let size: usize = std::str::from_utf8(&header[48..58]).ok()?.trim().parse().ok()?;
+        let size: usize = std::str::from_utf8(&header[48..58])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
         let start = pos + HEADER_LEN;
         let data = bytes.get(start..start.checked_add(size)?)?;
         // Members are padded to an even offset.

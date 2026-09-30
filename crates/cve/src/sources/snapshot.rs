@@ -42,7 +42,11 @@ pub struct Snapshot {
 /// build, which has no cache dir — see the wasm `load` below.
 #[cfg(not(target_arch = "wasm32"))]
 fn snapshot_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("achilles").join("vdb-snapshot.json"))
+    Some(
+        dirs::cache_dir()?
+            .join("achilles")
+            .join("vdb-snapshot.json"),
+    )
 }
 
 /// Load the snapshot from disk, or `None` if it's absent/unreadable/garbage.

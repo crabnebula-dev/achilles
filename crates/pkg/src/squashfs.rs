@@ -615,8 +615,10 @@ mod tests {
         listing.extend_from_slice(&1u32.to_le_bytes()); // count, less one
         listing.extend_from_slice(&0u32.to_le_bytes()); // inode block offset
         listing.extend_from_slice(&0u32.to_le_bytes()); // base inode number
-        for (offset, kind, name) in [(file_off, INODE_FILE, "app"), (link_off, INODE_SYMLINK, "link")]
-        {
+        for (offset, kind, name) in [
+            (file_off, INODE_FILE, "app"),
+            (link_off, INODE_SYMLINK, "link"),
+        ] {
             listing.extend_from_slice(&offset.to_le_bytes());
             listing.extend_from_slice(&0u16.to_le_bytes()); // inode number delta
             listing.extend_from_slice(&kind.to_le_bytes());

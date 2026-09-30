@@ -255,8 +255,18 @@ pub fn sniff(bytes: &[u8], filename: &str) -> Option<Format> {
 /// True for the tarball spellings that actually appear on download pages.
 fn is_tarball_name(lower: &str) -> bool {
     const SUFFIXES: &[&str] = &[
-        ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tbz", ".tar.zst",
-        ".tzst", ".tar.lz4", ".tar.lzma",
+        ".tar",
+        ".tar.gz",
+        ".tgz",
+        ".tar.xz",
+        ".txz",
+        ".tar.bz2",
+        ".tbz2",
+        ".tbz",
+        ".tar.zst",
+        ".tzst",
+        ".tar.lz4",
+        ".tar.lzma",
     ];
     SUFFIXES.iter().any(|s| lower.ends_with(s))
 }
@@ -400,6 +410,9 @@ mod tests {
             link_target(base, "/usr/lib/libfoo.so"),
             Path::new("/scan/usr/lib/libfoo.so")
         );
-        assert_eq!(link_target(base, "../lib/libfoo.so"), Path::new("../lib/libfoo.so"));
+        assert_eq!(
+            link_target(base, "../lib/libfoo.so"),
+            Path::new("../lib/libfoo.so")
+        );
     }
 }

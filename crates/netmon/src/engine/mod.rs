@@ -27,7 +27,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(session_id: String, target: TargetProcess, backend_id: String, started_at: u64) -> Self {
+    pub fn new(
+        session_id: String,
+        target: TargetProcess,
+        backend_id: String,
+        started_at: u64,
+    ) -> Self {
         Self {
             session_id,
             target,
@@ -46,11 +51,21 @@ impl Session {
     pub fn ingest(&mut self, ev: CapturedEvent) -> Vec<SessionDelta> {
         match ev {
             CapturedEvent::StreamData {
-                key, dir, bytes, at, ..
+                key,
+                dir,
+                bytes,
+                at,
+                ..
             } => {
                 self.last_at = at.max(self.last_at);
                 let dest = key.remote.to_string();
-                let is_new = self.touch_destination(&dest, key.remote.ip().to_string(), key.remote.port(), bytes.len() as u64, at);
+                let is_new = self.touch_destination(
+                    &dest,
+                    key.remote.ip().to_string(),
+                    key.remote.port(),
+                    bytes.len() as u64,
+                    at,
+                );
                 let mut out = self.new_dest_delta(&dest, is_new);
                 out.extend(self.handle_stream(&dest, dir, &bytes, at));
                 out
@@ -59,7 +74,13 @@ impl Session {
                 self.last_at = at.max(self.last_at);
                 self.flow_count += 1;
                 let dest = key.remote.to_string();
-                self.touch_destination(&dest, key.remote.ip().to_string(), key.remote.port(), 0, at);
+                self.touch_destination(
+                    &dest,
+                    key.remote.ip().to_string(),
+                    key.remote.port(),
+                    0,
+                    at,
+                );
                 vec![SessionDelta::Destination(self.destinations[&dest].clone())]
             }
             CapturedEvent::FlowClosed { .. } => vec![],
@@ -121,7 +142,13 @@ impl Session {
         }
     }
 
-    fn handle_stream(&mut self, dest: &str, dir: Direction, bytes: &[u8], _at: u64) -> Vec<SessionDelta> {
+    fn handle_stream(
+        &mut self,
+        dest: &str,
+        dir: Direction,
+        bytes: &[u8],
+        _at: u64,
+    ) -> Vec<SessionDelta> {
         let mut out = Vec::new();
         match tls::parse_handshake(bytes) {
             Some(tls::Handshake::Client(ch)) if dir == Direction::Outbound => {
@@ -129,7 +156,10 @@ impl Session {
                 let offered_versions: Vec<String> = if ch.supported_versions.is_empty() {
                     tls::version_str(ch.legacy_version).into_iter().collect()
                 } else {
-                    ch.supported_versions.iter().filter_map(|v| tls::version_str(*v)).collect()
+                    ch.supported_versions
+                        .iter()
+                        .filter_map(|v| tls::version_str(*v))
+                        .collect()
                 };
                 let hs = TlsHandshake {
                     destination: dest.to_string(),
@@ -152,7 +182,9 @@ impl Session {
                         d.hostname.get_or_insert_with(|| sni.clone());
                     }
                 }
-                self.hs_by_dest.entry(dest.to_string()).or_insert(self.handshakes.len());
+                self.hs_by_dest
+                    .entry(dest.to_string())
+                    .or_insert(self.handshakes.len());
                 self.handshakes.push(hs.clone());
                 if let Some(d) = self.destinations.get(dest) {
                     out.push(SessionDelta::Destination(d.clone()));
@@ -163,7 +195,10 @@ impl Session {
                 if let Some(&idx) = self.hs_by_dest.get(dest) {
                     let hs = &mut self.handshakes[idx];
                     hs.cipher_suite_selected = Some(sh.cipher);
-                    let neg = sh.supported_version.or(Some(sh.legacy_version)).and_then(tls::version_str);
+                    let neg = sh
+                        .supported_version
+                        .or(Some(sh.legacy_version))
+                        .and_then(tls::version_str);
                     hs.negotiated_version = neg;
                     // TLS 1.3 encrypts the cert — mark that the record is partial
                     // (no certificate observable) so the UI can explain it.

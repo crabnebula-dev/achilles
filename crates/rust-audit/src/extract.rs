@@ -38,7 +38,10 @@ pub(crate) fn parse_version_info(json: &str) -> Option<Vec<AuditedCrate>> {
             .filter_map(|p| {
                 semver::Version::parse(&p.version)
                     .ok()
-                    .map(|version| AuditedCrate { name: p.name, version })
+                    .map(|version| AuditedCrate {
+                        name: p.name,
+                        version,
+                    })
             })
             .collect(),
     )

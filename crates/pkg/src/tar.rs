@@ -15,10 +15,7 @@ const BLOCK: usize = 512;
 /// first header rather than at offset 0, which is why a `.tar` needs looking
 /// *into* rather than sniffing.
 pub fn is_tar(bytes: &[u8]) -> bool {
-    bytes
-        .get(257..262)
-        .map(|m| m == b"ustar")
-        .unwrap_or(false)
+    bytes.get(257..262).map(|m| m == b"ustar").unwrap_or(false)
 }
 
 pub fn unpack(
@@ -209,7 +206,11 @@ mod tests {
 
     fn run(archive: &[u8]) -> (Collector, Unpacked) {
         let mut sink = Collector::default();
-        let mut out = Unpacked::new(Format::Tarball, Path::new("/scan"), crate::MAX_PAYLOAD_BYTES);
+        let mut out = Unpacked::new(
+            Format::Tarball,
+            Path::new("/scan"),
+            crate::MAX_PAYLOAD_BYTES,
+        );
         unpack(archive, Path::new("/scan"), &mut sink, &mut out).unwrap();
         (sink, out)
     }

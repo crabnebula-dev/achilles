@@ -57,7 +57,6 @@ async fn main() {
 async fn serve(stream: tokio::net::UnixStream) {
     use netmon::source::{CapturedEvent, PidFilter};
     use netmon::wire;
-    
 
     let (mut rd, mut wr) = stream.into_split();
 

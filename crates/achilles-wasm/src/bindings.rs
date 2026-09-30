@@ -281,7 +281,12 @@ impl pkg::Sink for TreeSink<'_> {
         Ok(())
     }
 
-    fn file(&mut self, path: &std::path::Path, data: Vec<u8>, mode: u32) -> Result<(), pkg::PkgError> {
+    fn file(
+        &mut self,
+        path: &std::path::Path,
+        data: Vec<u8>,
+        mode: u32,
+    ) -> Result<(), pkg::PkgError> {
         self.0.insert_file_with_mode(path.to_path_buf(), data, mode);
         Ok(())
     }
@@ -291,7 +296,8 @@ impl pkg::Sink for TreeSink<'_> {
         path: &std::path::Path,
         target: &std::path::Path,
     ) -> Result<(), pkg::PkgError> {
-        self.0.insert_symlink(path.to_path_buf(), target.to_path_buf());
+        self.0
+            .insert_symlink(path.to_path_buf(), target.to_path_buf());
         Ok(())
     }
 }

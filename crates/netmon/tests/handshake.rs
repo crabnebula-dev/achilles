@@ -51,9 +51,18 @@ fn client_hello_yields_handshake_and_cbom() {
         },
         &evidence,
     );
-    assert!(inv.assets.iter().any(|a| a.bom_ref == "crypto/algorithm/ecdhe"));
-    assert!(inv.assets.iter().any(|a| a.bom_ref == "crypto/algorithm/x25519"));
-    assert!(inv.assets.iter().any(|a| a.bom_ref == "crypto/algorithm/aes-128-gcm"));
+    assert!(inv
+        .assets
+        .iter()
+        .any(|a| a.bom_ref == "crypto/algorithm/ecdhe"));
+    assert!(inv
+        .assets
+        .iter()
+        .any(|a| a.bom_ref == "crypto/algorithm/x25519"));
+    assert!(inv
+        .assets
+        .iter()
+        .any(|a| a.bom_ref == "crypto/algorithm/aes-128-gcm"));
     assert_eq!(inv.readiness.grade, "vulnerable"); // ECDHE/RSA/x25519 present
 }
 

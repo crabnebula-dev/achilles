@@ -222,11 +222,7 @@ fn follow_wrapper(path: &Path, depth: u8) -> Option<PathBuf> {
 ///
 /// Without this every such path is dangling and the follow fails, leaving the
 /// app resolved to nothing but its runner.
-pub(crate) fn follow_wrapper_in(
-    path: &Path,
-    depth: u8,
-    payload: Option<&Path>,
-) -> Option<PathBuf> {
+pub(crate) fn follow_wrapper_in(path: &Path, depth: u8, payload: Option<&Path>) -> Option<PathBuf> {
     if depth >= 5 {
         return Some(path.to_path_buf());
     }
@@ -259,10 +255,7 @@ pub(crate) fn follow_wrapper_in(
     .collect();
     // `$SNAP` is where a snap's own launcher expects to find its files.
     if let Some(payload) = payload {
-        vars.insert(
-            "SNAP".to_string(),
-            payload.to_string_lossy().into_owned(),
-        );
+        vars.insert("SNAP".to_string(), payload.to_string_lossy().into_owned());
     }
 
     let mut target: Option<String> = None;
@@ -315,7 +308,9 @@ pub(crate) fn follow_wrapper_in(
 /// app's own tree — to where that file is on the host. `None` when the path
 /// isn't under `/app` and so needs no rewriting.
 pub(crate) fn map_sandbox_path(path: &Path, payload: &Path) -> Option<PathBuf> {
-    path.strip_prefix("/app").ok().map(|rest| payload.join(rest))
+    path.strip_prefix("/app")
+        .ok()
+        .map(|rest| payload.join(rest))
 }
 
 /// Pick the executable token from the tokens following `exec`, skipping

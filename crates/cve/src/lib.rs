@@ -312,7 +312,11 @@ impl Client_ {
                 (Bucket::Flutter, "flutter", versions.flutter.as_ref()),
                 (Bucket::Qt, "qt", versions.qt.as_ref()),
                 (Bucket::Nwjs, "nwjs", versions.nwjs.as_ref()),
-                (Bucket::ReactNative, "react_native", versions.react_native.as_ref()),
+                (
+                    Bucket::ReactNative,
+                    "react_native",
+                    versions.react_native.as_ref(),
+                ),
                 (Bucket::Wails, "wails", versions.wails.as_ref()),
                 (Bucket::Sciter, "sciter", versions.sciter.as_ref()),
                 (Bucket::Webkit, "webkit", versions.webkit.as_ref()),
@@ -436,7 +440,13 @@ impl Client_ {
                     "nvd",
                     "deno",
                     v,
-                    sources::nvd::lookup_cpe_with_key(http, "deno", "deno", v, s.nvd.api_key.as_deref())
+                    sources::nvd::lookup_cpe_with_key(
+                        http,
+                        "deno",
+                        "deno",
+                        v,
+                        s.nvd.api_key.as_deref()
+                    )
                 );
             }
             if s.euvd.enabled {
@@ -964,7 +974,8 @@ fn current_year() -> Option<u32> {
     let mut year = 1970u32;
     let mut remaining = days;
     loop {
-        let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+        let leap =
+            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
         let in_year = if leap { 366 } else { 365 };
         if remaining < in_year {
             return Some(year);

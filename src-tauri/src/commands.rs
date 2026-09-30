@@ -381,21 +381,20 @@ pub async fn netmon_stop(
     // It usually finished during the recording, so this is instant; a bound
     // guards the rare case of a very short recording over a huge bundle, in which
     // case we ship the runtime-only inventory and the scan's result is dropped.
-    let static_ev = match tokio::time::timeout(
-        std::time::Duration::from_secs(20),
-        active.static_scan,
-    )
-    .await
-    {
-        Ok(Ok(ev)) => ev,
-        _ => Vec::new(),
-    };
+    let static_ev =
+        match tokio::time::timeout(std::time::Duration::from_secs(20), active.static_scan).await {
+            Ok(Ok(ev)) => ev,
+            _ => Vec::new(),
+        };
     evidence.extend(static_ev);
 
     let target = &active.meta.target;
 
     let app_ref = cbom::AppRef {
-        name: target.display_name.clone().unwrap_or_else(|| "application".into()),
+        name: target
+            .display_name
+            .clone()
+            .unwrap_or_else(|| "application".into()),
         version: None,
         bundle_id: target.bundle_id.clone(),
         path: active.app_path.clone().or_else(|| target.exe_path.clone()),
@@ -470,10 +469,7 @@ pub async fn crypto_inventory(
 
 /// Load the last persisted crypto inventory for an app (retained across runs).
 #[tauri::command]
-pub async fn crypto_load(
-    path: String,
-    bundle_id: Option<String>,
-) -> Option<cbom::CryptoInventory> {
+pub async fn crypto_load(path: String, bundle_id: Option<String>) -> Option<cbom::CryptoInventory> {
     crate::crypto_store::load(&path, bundle_id.as_deref())
 }
 
@@ -611,12 +607,18 @@ pub(crate) fn compute_os_info() -> OsInfo {
         "macos" => match major {
             Some(m) if m < 14 => (
                 true,
-                Some("macOS is out of date — update for the latest Safari/WebKit security fixes.".into()),
+                Some(
+                    "macOS is out of date — update for the latest Safari/WebKit security fixes."
+                        .into(),
+                ),
             ),
             _ => (false, None),
         },
         "windows" => match major {
-            Some(m) if m < 10 => (true, Some("Windows is out of date — update for current security fixes.".into())),
+            Some(m) if m < 10 => (
+                true,
+                Some("Windows is out of date — update for current security fixes.".into()),
+            ),
             _ => (false, None),
         },
         _ => (false, None),

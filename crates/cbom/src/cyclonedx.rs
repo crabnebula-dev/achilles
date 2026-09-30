@@ -66,8 +66,11 @@ fn protocol_component(a: &CryptoAsset) -> Value {
             props["version"] = json!(v);
         }
         if !info.cipher_suites.is_empty() {
-            props["cipherSuites"] =
-                json!(info.cipher_suites.iter().map(|n| json!({ "name": n })).collect::<Vec<_>>());
+            props["cipherSuites"] = json!(info
+                .cipher_suites
+                .iter()
+                .map(|n| json!({ "name": n }))
+                .collect::<Vec<_>>());
         }
     }
     json!({

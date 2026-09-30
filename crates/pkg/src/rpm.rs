@@ -95,7 +95,10 @@ impl Header {
         let store = index + count * INDEX_ENTRY;
         let end = store + store_len;
         if end > bytes.len() {
-            return Err(PkgError::Malformed("rpm", "header runs past end of file".into()));
+            return Err(PkgError::Malformed(
+                "rpm",
+                "header runs past end of file".into(),
+            ));
         }
         Ok(Header {
             index,
@@ -108,7 +111,8 @@ impl Header {
     /// The NUL-terminated string stored for `tag`, if present.
     fn string(&self, bytes: &[u8], tag: u32) -> Option<String> {
         for i in 0..self.count {
-            let entry = bytes.get(self.index + i * INDEX_ENTRY..self.index + (i + 1) * INDEX_ENTRY)?;
+            let entry =
+                bytes.get(self.index + i * INDEX_ENTRY..self.index + (i + 1) * INDEX_ENTRY)?;
             if be32(&entry[0..4]) != tag {
                 continue;
             }
@@ -190,6 +194,9 @@ mod tests {
     #[test]
     fn a_non_cpio_payload_is_reported_rather_than_misparsed() {
         let rpm = build(&[(TAG_PAYLOADFORMAT, "drpm")], b"delta");
-        assert!(matches!(super::payload(&rpm), Err(PkgError::Unsupported(_))));
+        assert!(matches!(
+            super::payload(&rpm),
+            Err(PkgError::Unsupported(_))
+        ));
     }
 }

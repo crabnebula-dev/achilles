@@ -72,7 +72,9 @@ pub fn unpack(
         match fields.mode & S_IFMT {
             S_IFDIR => sink.dir(&path)?,
             S_IFLNK => {
-                let target = String::from_utf8_lossy(data).trim_end_matches('\0').to_string();
+                let target = String::from_utf8_lossy(data)
+                    .trim_end_matches('\0')
+                    .to_string();
                 sink.symlink(&path, &link_target(base, &target))?;
             }
             S_IFREG => {
