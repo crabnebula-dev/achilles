@@ -40,7 +40,7 @@ Electron apps it audits actually looks like.
 
 ## Quickstart
 
-Requirements: Rust 1.80+. macOS 12+, Windows 10+, or a Linux desktop. The GUI
+Requirements: Rust 1.90+. macOS 12+, Windows 10+, or a Linux desktop. The GUI
 needs nothing else to run.
 
 ```sh

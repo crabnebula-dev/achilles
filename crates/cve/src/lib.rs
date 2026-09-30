@@ -898,7 +898,7 @@ fn apply_age_filter(report: &mut CveReport, max_age_years: Option<u32>) {
     let cutoff = current.saturating_sub(max);
 
     let filter = |v: &mut Vec<Advisory>| {
-        v.retain(|a| advisory_year(a).map_or(true, |y| y >= cutoff));
+        v.retain(|a| advisory_year(a).is_none_or(|y| y >= cutoff));
     };
 
     filter(&mut report.electron);
@@ -928,7 +928,7 @@ pub fn filter_npm_by_age(results: &mut [NpmPackageAdvisories], max_age_years: Op
     let cutoff = current.saturating_sub(max);
     for r in results.iter_mut() {
         r.advisories
-            .retain(|a| advisory_year(a).map_or(true, |y| y >= cutoff));
+            .retain(|a| advisory_year(a).is_none_or(|y| y >= cutoff));
     }
 }
 
@@ -964,7 +964,7 @@ fn current_year() -> Option<u32> {
     let mut year = 1970u32;
     let mut remaining = days;
     loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
         let in_year = if leap { 366 } else { 365 };
         if remaining < in_year {
             return Some(year);

@@ -118,7 +118,7 @@ fn parse_client_hello(b: &[u8]) -> Option<ClientHello> {
     r.take(sid_len)?; // session id
     let cs_len = r.u16()? as usize;
     let cs = r.take(cs_len)?;
-    for pair in cs.chunks_exact(2) {
+    for pair in cs.as_chunks::<2>().0 {
         let id = u16::from_be_bytes([pair[0], pair[1]]);
         if !is_grease(id) {
             ch.ciphers.push(id);
@@ -165,7 +165,7 @@ fn parse_u16_list(body: &[u8], strip_grease: bool) -> Vec<u16> {
     let Some(list) = r.take(list_len as usize) else {
         return Vec::new();
     };
-    list.chunks_exact(2)
+    list.as_chunks::<2>().0.iter()
         .map(|p| u16::from_be_bytes([p[0], p[1]]))
         .filter(|v| !strip_grease || !is_grease(*v))
         .collect()
@@ -180,7 +180,7 @@ fn parse_u16_list_u8len(body: &[u8]) -> Vec<u16> {
     let Some(list) = r.take(list_len as usize) else {
         return Vec::new();
     };
-    list.chunks_exact(2)
+    list.as_chunks::<2>().0.iter()
         .map(|p| u16::from_be_bytes([p[0], p[1]]))
         .filter(|v| !is_grease(*v))
         .collect()
