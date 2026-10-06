@@ -81,6 +81,8 @@ async fn serve(stream: tokio::net::UnixStream) {
 
     #[cfg(target_os = "macos")]
     {
+        use tokio::io::AsyncReadExt;
+
         let (mut rx, handle) = match source.start(filter).await {
             Ok(v) => v,
             Err(e) => {
