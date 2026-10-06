@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
+  "$schema": "https://schema.tauri.app/config/3",
   "productName": "Achilles",
   "version": "0.7.0",
   "identifier": "dev.crabnebula.achilles",
@@ -8,7 +8,6 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Achilles",

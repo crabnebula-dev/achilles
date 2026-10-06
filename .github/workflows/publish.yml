@@ -51,7 +51,7 @@ jobs:
           cache-on-failure: true
 
       - name: install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo install tauri-cli --version "^3.0.0-alpha" --locked
 
       - name: install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'

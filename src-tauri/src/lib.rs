@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, WindowEvent, Wry};
+use tauri::{AppHandle, DynRuntime, Manager, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 /// Serialises reassessment runs so the scheduler, tray, and manual command can
@@ -70,11 +70,11 @@ struct LastRun {
 #[derive(Default)]
 pub struct TrayStatus {
     /// "N apps need attention" (click → show window).
-    risk_item: Mutex<Option<MenuItem<Wry>>>,
+    risk_item: Mutex<Option<MenuItem<DynRuntime>>>,
     /// "System update available" (click → open OS update settings).
-    os_item: Mutex<Option<MenuItem<Wry>>>,
+    os_item: Mutex<Option<MenuItem<DynRuntime>>>,
     /// Reporting on/off + last-check summary (disabled label).
-    reporting_item: Mutex<Option<MenuItem<Wry>>>,
+    reporting_item: Mutex<Option<MenuItem<DynRuntime>>>,
     last: Mutex<Option<LastRun>>,
 }
 
@@ -220,6 +220,7 @@ pub async fn run_reassessment(app: AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        .runtime(tauri_runtime_wry::Wry::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -435,7 +436,7 @@ fn show_main_window(app: &AppHandle) {
 /// Bring the OS login-item state in line with the saved config.
 fn reconcile_autostart(app: &AppHandle) {
     let want = reporting::load().autostart;
-    let manager = app.autolaunch();
+    let manager = app.autostart();
     let is_on = manager.is_enabled().unwrap_or(false);
     if want && !is_on {
         let _ = manager.enable();

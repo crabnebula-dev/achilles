@@ -13,16 +13,17 @@ name = "achilles_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "3.0.0-alpha.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = ["macos-private-api", "tray-icon"] }
-tauri-plugin-shell = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-autostart = "2"
+tauri = { version = "3.0.0-alpha.4", features = ["tray-icon"] }
+tauri-runtime-wry = "3.0.0-alpha.4"
+tauri-plugin-shell = "3.0.0-alpha.2"
+tauri-plugin-updater = "3.0.0-alpha.2"
+tauri-plugin-process = "3.0.0-alpha.2"
+tauri-plugin-dialog = "3.0.0-alpha.3"
+tauri-plugin-fs = "3.0.0-alpha.2"
+tauri-plugin-autostart = "3.0.0-alpha.2"
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

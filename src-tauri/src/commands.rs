@@ -212,7 +212,7 @@ pub async fn set_reporting_config(
 
     crate::reporting::save(&config).map_err(|e| e.to_string())?;
 
-    let manager = app.autolaunch();
+    let manager = app.autostart();
     let is_on = manager.is_enabled().unwrap_or(false);
     if config.autostart && !is_on {
         manager.enable().map_err(|e| e.to_string())?;

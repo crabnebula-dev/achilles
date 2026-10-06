@@ -10,7 +10,7 @@
     "updater:default",
     "process:default",
     "dialog:allow-save",
-    "fs:allow-write-text-file",
+    "fs:allow-write-file",
     "autostart:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
