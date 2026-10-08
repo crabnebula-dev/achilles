@@ -218,6 +218,7 @@ function updateRowRisk(path) {
     span.textContent = risk;
   }
   entry.row.hidden = !rowMatches(entry.detection);
+  scheduleDashboard();
 }
 
 function sortRowsInto(container) {
@@ -246,6 +247,7 @@ function handleDetection(det) {
   }
   rows.set(det.path, { row: fresh, detection: det });
   fresh.hidden = !rowMatches(det);
+  scheduleDashboard();
 }
 
 // ---------- column filters ----------
@@ -1224,6 +1226,9 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   // Linked-library vulnerabilities (on-demand NVD lookup by CPE).
   parts.push(renderLibCve(det));
 
+  // Open-source license composition (on-demand; Rust crates hit crates.io).
+  parts.push(renderLicenses(det));
+
   if (audit && !audit.error) {
     // The audit payload is platform-tagged (`platform`: macos | windows | linux).
     parts.push(...renderAudit(audit));
@@ -1936,6 +1941,131 @@ detailBody.addEventListener("click", (e) => {
     .finally(() => refreshLibCve(det));
 });
 
+// ---------- open-source license composition --------------------------
+
+// copyleft class → { label, css color class }.
+const LICENSE_CLASS = {
+  permissive: { label: "permissive", css: "ok" },
+  weakCopyleft: { label: "weak copyleft", css: "warn" },
+  strongCopyleft: { label: "strong copyleft", css: "bad" },
+  unknown: { label: "unknown", css: "unknown" },
+};
+function licenseClassMeta(cls) {
+  return LICENSE_CLASS[cls] || LICENSE_CLASS.unknown;
+}
+
+const licenseState = new Map();
+function licenseFor(path) {
+  if (!licenseState.has(path)) {
+    licenseState.set(path, { status: "idle", result: null, error: null });
+  }
+  return licenseState.get(path);
+}
+
+function renderLicenses(det) {
+  return `<h3>Open-source licenses</h3><div id="license-section">${renderLicensesInner(licenseFor(det.path))}</div>`;
+}
+
+function renderLicensesInner(st) {
+  if (st.status === "running") {
+    return `<p class="muted">resolving licenses… (Rust crates are looked up on crates.io the first time)</p>`;
+  }
+  if (st.status === "done" && st.result) {
+    return renderComposition(st.result);
+  }
+  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
+  return `${err}<p class="muted">Inventory the open-source licenses of this app's runtime, linked native libraries, npm dependencies and Rust crates — classified by copyleft strength. <button type="button" data-license="run">Scan licenses</button></p>`;
+}
+
+function renderComposition(c) {
+  const t = c.tally;
+  const chip = (n, label, css) => `<span class="risk ${css}">${n} ${label}</span>`;
+  const chips = [
+    chip(t.permissive, "permissive", "ok"),
+    chip(t.weakCopyleft, "weak", "warn"),
+    chip(t.strongCopyleft, "strong", "bad"),
+    chip(t.unknown, "unknown", "unknown"),
+  ].join(" ");
+
+  const flags = (c.flags || [])
+    .map((f) => `<p class="warn">⚠ ${escapeHtml(f)}</p>`)
+    .join("");
+
+  const byLic = (c.byLicense || [])
+    .map((l) => {
+      const m = licenseClassMeta(l.class);
+      return `<tr><td><code>${escapeHtml(l.license)}</code></td><td><span class="risk ${m.css}">${m.label}</span></td><td>${l.count}</td></tr>`;
+    })
+    .join("");
+
+  const comps = (c.components || [])
+    .map((x) => {
+      const m = licenseClassMeta(x.class);
+      return `<tr><td class="muted">${escapeHtml(x.source)}</td><td><code>${escapeHtml(x.name)}</code>${
+        x.version ? ` <span class="muted">${escapeHtml(x.version)}</span>` : ""
+      }</td><td><code>${escapeHtml(x.license)}</code></td><td><span class="risk ${m.css}">${m.label}</span></td><td class="muted">${
+        x.note ? escapeHtml(x.note) : ""
+      }</td></tr>`;
+    })
+    .join("");
+
+  const notices = (c.noticeFiles || [])
+    .map((f) => `<li><code>${escapeHtml(f)}</code></li>`)
+    .join("");
+
+  return `
+    <p>${chips}</p>
+    ${flags || `<p class="ok">All components are permissively licensed.</p>`}
+    <table class="crypto-dests"><thead><tr><th>license</th><th>class</th><th>#</th></tr></thead><tbody>${byLic}</tbody></table>
+    <details class="binmeta-list"><summary class="muted">${c.components.length} component(s)</summary>
+      <table class="crypto-dests"><thead><tr><th>source</th><th>component</th><th>license</th><th>class</th><th>note</th></tr></thead><tbody>${comps}</tbody></table>
+    </details>
+    ${
+      notices
+        ? `<details class="binmeta-list"><summary class="muted">${c.noticeFiles.length} bundled license/notice file(s)</summary><ul>${notices}</ul></details>`
+        : ""
+    }
+    <p><button type="button" data-license="run">Re-scan</button></p>`;
+}
+
+function refreshLicenses(det) {
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#license-section");
+  if (el) el.innerHTML = renderLicensesInner(licenseFor(det.path));
+}
+
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-license]");
+  if (!btn || !currentDetail) return;
+  const det = currentDetail;
+  const st = licenseFor(det.path);
+  st.status = "running";
+  st.error = null;
+  refreshLicenses(det);
+  // Reuse the npm dependency list already parsed by the static scan (it now
+  // carries per-package licenses); the backend fills in the rest.
+  const cached = detailCache.get(det.path);
+  const deps =
+    cached?.staticScan && !cached.staticScan.error ? cached.staticScan.dependencies ?? null : null;
+  invoke("license_scan", {
+    path: det.path,
+    root: det.root ?? null,
+    executable: det.executable ?? null,
+    versions: det.versions,
+    framework: det.framework ?? null,
+    dependencies: deps,
+  })
+    .then((result) => {
+      st.result = result;
+      st.status = "done";
+    })
+    .catch((err) => {
+      st.error = String(err);
+      st.status = "idle";
+    })
+    .finally(() => refreshLicenses(det));
+});
+
 detailBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-rustaudit]");
   if (!btn || !currentDetail) return;
@@ -2195,6 +2325,8 @@ function clearList() {
   stopHelperPolling();
   seenCount = 0;
   expectedTotal = 0;
+  scanFinished = false;
+  scheduleDashboard();
 }
 
 rescanBtn.addEventListener("click", () => {
@@ -2416,6 +2548,7 @@ listen("scan_event", ({ payload }) => {
   switch (payload.event) {
     case "started":
       expectedTotal = payload.total;
+      scanFinished = false;
       setStatus(`scanning ${payload.total}…`);
       break;
     case "detected":
@@ -2433,6 +2566,8 @@ listen("scan_event", ({ payload }) => {
       setStatus(`done: ${payload.count} bundles`);
       sortRowsInto(tbody);
       applyFilters();
+      scanFinished = true;
+      scheduleDashboard();
       break;
   }
 });
@@ -2491,6 +2626,384 @@ async function startScan() {
     setStatus(`scan failed: ${err}`);
   }
 }
+
+// ---------- posture dashboard ----------
+// A second view over the same scan data: the OS's update status, the risk mix
+// across every installed app, and a ranked "needs attention" list explaining
+// *why* each app was flagged. Everything is derived from `rows` +
+// `detailCache` (so it reflects CVEs learned in the detail pane), recomputed
+// on demand — there is no separate dashboard state to keep in sync.
+
+const dashboardPanel = document.querySelector("#dashboard-panel");
+const navDashboardBtn = document.querySelector("#nav-dashboard");
+const mainEl = document.querySelector("main");
+
+/** Latest `os_info` result (null until it resolves, or in the web build). */
+let osInfo = null;
+let scanFinished = false;
+
+/** Bulk "check CVEs for flagged apps" progress: null when idle. */
+let dashCveSweep = null;
+
+const RISK_LABEL = { bad: "High risk", warn: "Review", ok: "OK", unknown: "Unrated" };
+
+function dashboardVisible() {
+  return mainEl.dataset.view === "dashboard";
+}
+
+function showView(view) {
+  const dash = view === "dashboard";
+  mainEl.dataset.view = dash ? "dashboard" : "apps";
+  dashboardPanel.hidden = !dash;
+  navDashboardBtn.textContent = dash ? "Apps" : "Dashboard";
+  navDashboardBtn.title = dash ? "Back to the app list" : "Security posture overview";
+  navDashboardBtn.setAttribute("aria-pressed", String(dash));
+  if (dash) renderDashboard();
+}
+
+// Coalesce the burst of repaints a streaming scan produces into one per frame.
+let dashRenderQueued = false;
+function scheduleDashboard() {
+  if (!dashboardVisible() || dashRenderQueued) return;
+  dashRenderQueued = true;
+  requestAnimationFrame(() => {
+    dashRenderQueued = false;
+    if (dashboardVisible()) renderDashboard();
+  });
+}
+
+const appName = (det) => det.display_name || det.bundle_id || det.path;
+
+// The runtime that best characterises an app's attack surface, for the
+// attention list ("Electron 33.1.0").
+function primaryRuntime(det) {
+  const v = det.versions;
+  const pick = (key, label) => (v[key] ? `${label} ${v[key]}` : null);
+  switch (det.framework) {
+    case "electron":
+      return pick("electron", "Electron") || pick("chromium", "Chromium");
+    case "cef":
+      return pick("cef", "CEF") || pick("chromium", "Chromium");
+    case "tauri":
+      return pick("tauri", "Tauri");
+    case "chromiumbrowser":
+      return pick("chromium", "Chromium");
+    default:
+      for (const { key, label } of RUNTIME_CVE_SOURCES) {
+        if (key !== "webkit" && v[key]) return `${label} ${v[key]}`;
+      }
+      return null;
+  }
+}
+
+// Human-readable reasons behind an app's rating — mirrors versionRisk() and
+// findingsRisk() so the dashboard never claims more than the table does.
+function riskReasons(det, findings) {
+  const out = [];
+  const v = det.versions;
+  const major = (s) => parseInt(String(s).split(".")[0], 10);
+  if (det.framework === "electron" && v.electron) {
+    const m = major(v.electron);
+    if (m < 35) out.push({ level: "bad", text: `Electron ${m} is well past end-of-life` });
+    else if (m < 40) out.push({ level: "warn", text: `Electron ${m} is behind the supported releases` });
+  }
+  if (det.framework === "tauri" && v.tauri && major(v.tauri) < 1) {
+    out.push({ level: "warn", text: `Pre-1.0 Tauri (${v.tauri})` });
+  }
+  if (det.framework === "cef" && v.cef && major(v.cef) < 130) {
+    out.push({ level: "warn", text: `CEF ${major(v.cef)} embeds an old Chromium` });
+  }
+
+  const cves = findings?.cves;
+  if (cves && !cves.pending && !cves.error) {
+    let total = 0;
+    let high = 0;
+    for (const { key } of RUNTIME_CVE_SOURCES) {
+      for (const a of cves[key] ?? []) {
+        total++;
+        if (severityRank(a.severity) >= 3) high++;
+      }
+    }
+    if (total) {
+      out.push({
+        level: high ? "bad" : "warn",
+        text: high ? `${high} high/critical of ${total} runtime CVEs` : `${total} runtime CVE(s)`,
+      });
+    }
+  }
+  if (Array.isArray(findings?.depAdvisories)) {
+    const n = findings.depAdvisories.reduce((acc, d) => acc + (d.advisories?.length ?? 0), 0);
+    if (n) out.push({ level: advisoryListRisk(findings.depAdvisories.flatMap((d) => d.advisories ?? [])), text: `${n} npm dependency advisory(ies)` });
+  }
+  const rust = rustAuditState.get(det.path)?.report;
+  if (rust && !rust.dbError) {
+    const n = (rust.findings ?? []).filter((f) => !f.informational).length;
+    if (n) out.push({ level: "warn", text: `${n} vulnerable Rust crate(s)` });
+  }
+  const libs = libCveState.get(det.path)?.results;
+  if (Array.isArray(libs)) {
+    const n = libs.reduce((acc, r) => acc + (r.advisories?.length ?? 0), 0);
+    if (n) out.push({ level: advisoryListRisk(libs.flatMap((r) => r.advisories ?? [])), text: `${n} linked-library CVE(s)` });
+  }
+  return out;
+}
+
+/** Snapshot of everything the dashboard shows, computed from current state. */
+function postureSummary() {
+  const counts = { bad: 0, warn: 0, ok: 0, unknown: 0 };
+  const frameworks = new Map();
+  const attention = [];
+  for (const { detection: det } of rows.values()) {
+    const findings = detailCache.get(det.path);
+    const risk = riskLevel(det, findings);
+    counts[risk] = (counts[risk] ?? 0) + 1;
+    frameworks.set(det.framework, (frameworks.get(det.framework) ?? 0) + 1);
+    if (risk === "bad" || risk === "warn") {
+      const cves = findings?.cves;
+      attention.push({
+        det,
+        risk,
+        reasons: riskReasons(det, findings),
+        cvesChecked: Boolean(cves && !cves.pending && !cves.error),
+      });
+    }
+  }
+  // Worst first, then alphabetically — stable as rows stream in.
+  attention.sort(
+    (a, b) => RISK_ORDER[b.risk] - RISK_ORDER[a.risk] || appName(a.det).localeCompare(appName(b.det)),
+  );
+  return { total: rows.size, counts, frameworks, attention };
+}
+
+// Overall verdict: the worst of the OS status and the app population. Kept
+// deliberately coarse — like the per-row rating, this is an indicator.
+function postureVerdict(s) {
+  const reasons = [];
+  if (osInfo?.outdated) reasons.push({ level: "bad", text: osInfo.note || "The operating system is out of date." });
+  if (s.counts.bad) reasons.push({ level: "bad", text: `${s.counts.bad} app(s) ship a runtime with known or likely-exploitable issues.` });
+  if (s.counts.warn) reasons.push({ level: "warn", text: `${s.counts.warn} app(s) are running an aging runtime.` });
+  const level = reasons.reduce((acc, r) => maxRisk(acc, r.level), s.total ? "ok" : "unknown");
+  const headline = {
+    bad: "Needs attention",
+    warn: "Mostly fine — a few apps to review",
+    ok: "Looking good",
+    unknown: scanFinished ? "No apps found" : "Scanning…",
+  }[level];
+  return { level, headline, reasons };
+}
+
+function renderDashboard() {
+  const s = postureSummary();
+  const verdict = postureVerdict(s);
+  const scanning = !scanFinished && expectedTotal > 0;
+
+  const verdictReasons = verdict.reasons.length
+    ? `<ul class="dash-reasons">${verdict.reasons
+        .map((r) => `<li class="${r.level}">${escapeHtml(r.text)}</li>`)
+        .join("")}</ul>`
+    : s.total
+      ? `<p class="muted">No app is flagged by the runtime-age heuristic${
+          osInfo ? " and the OS is current" : ""
+        }. Open individual apps (or check CVEs below) for a deeper look.</p>`
+      : "";
+
+  const progress = scanning
+    ? `<p class="muted">Scanning ${seenCount}/${expectedTotal} apps — figures update live.</p>`
+    : "";
+
+  dashboardPanel.innerHTML = `
+    <div class="dash-grid">
+      <article class="dash-card dash-verdict ${verdict.level}">
+        <h2>Posture</h2>
+        <p class="dash-headline">${escapeHtml(verdict.headline)}</p>
+        ${progress}
+        ${verdictReasons}
+      </article>
+
+      <article class="dash-card">
+        <h2>Operating system</h2>
+        ${renderOsCard()}
+      </article>
+
+      <article class="dash-card dash-wide">
+        <h2>Installed apps <span class="muted">${s.total}</span></h2>
+        <div class="dash-tiles">
+          ${["bad", "warn", "ok", "unknown"]
+            .map(
+              (r) => `<button type="button" class="dash-tile ${r}" data-dash-risk="${r}" ${
+                s.counts[r] ? "" : "disabled"
+              } title="Show these apps in the list">
+                <span class="dash-tile-n">${s.counts[r]}</span>
+                <span class="dash-tile-label">${RISK_LABEL[r]}</span>
+              </button>`,
+            )
+            .join("")}
+        </div>
+        ${renderRiskBar(s)}
+        <p class="muted dash-footnote">“Unrated” apps use a framework without a defensible version cutoff — open one to look up its CVEs.</p>
+      </article>
+
+      <article class="dash-card dash-wide">
+        <h2>Needs attention <span class="muted">${s.attention.length}</span></h2>
+        ${renderAttention(s)}
+      </article>
+
+      <article class="dash-card dash-wide">
+        <h2>Framework mix</h2>
+        ${renderFrameworks(s)}
+      </article>
+    </div>`;
+}
+
+function renderOsCard() {
+  if (!osInfo) {
+    return `<p class="muted">OS details aren't available in this build.</p>`;
+  }
+  const status = osInfo.outdated
+    ? `<p><span class="risk bad">outdated</span> ${escapeHtml(osInfo.note ?? "")}</p>`
+    : `<p><span class="risk ok">current</span> <span class="muted">Meets Achilles' minimum supported version.</span></p>`;
+  return `
+    <p class="dash-os-name">${escapeHtml(osInfo.display)}</p>
+    ${status}
+    <p class="muted">System-WebView apps (Tauri, Wails, Safari) inherit the OS's WebKit security fixes, so OS updates patch them too.</p>
+    <p><button type="button" data-dash-action="os-update">Open software update</button></p>`;
+}
+
+function renderRiskBar(s) {
+  if (!s.total) return "";
+  const seg = (r) =>
+    s.counts[r]
+      ? `<span class="dash-bar-seg ${r}" style="flex-grow:${s.counts[r]}" title="${RISK_LABEL[r]}: ${s.counts[r]}"></span>`
+      : "";
+  return `<div class="dash-bar" role="img" aria-label="${["bad", "warn", "ok", "unknown"]
+    .map((r) => `${s.counts[r]} ${RISK_LABEL[r]}`)
+    .join(", ")}">${["bad", "warn", "ok", "unknown"].map(seg).join("")}</div>`;
+}
+
+function renderAttention(s) {
+  if (!s.attention.length) {
+    return `<p class="muted">${
+      scanFinished ? "Nothing flagged. 🎉" : "Nothing flagged yet."
+    }</p>`;
+  }
+  const unchecked = s.attention.filter((a) => !a.cvesChecked).length;
+  let sweep = "";
+  if (dashCveSweep) {
+    sweep = `<p class="muted">Checking CVEs… ${dashCveSweep.done}/${dashCveSweep.total}${
+      dashCveSweep.current ? ` — ${escapeHtml(dashCveSweep.current)}` : ""
+    }</p>`;
+  } else if (unchecked) {
+    sweep = `<p class="muted">${unchecked} of these haven't had a CVE lookup yet.
+      <button type="button" data-dash-action="cve-sweep">Check CVEs for flagged apps</button></p>`;
+  }
+  const items = s.attention
+    .map(({ det, risk, reasons, cvesChecked }) => {
+      const runtime = primaryRuntime(det);
+      const why = reasons.length
+        ? reasons.map((r) => `<li class="${r.level}">${escapeHtml(r.text)}</li>`).join("")
+        : `<li class="muted">Flagged by runtime version</li>`;
+      return `<li>
+        <button type="button" class="dash-app" data-dash-open="${escapeHtml(det.path)}" title="Open this app's audit">
+          <span class="risk ${risk}">${risk}</span>
+          <span class="dash-app-main">
+            <span class="dash-app-name">${escapeHtml(appName(det))}</span>
+            <span class="dash-app-meta">
+              <span class="framework-tag ${escapeHtml(det.framework)}">${escapeHtml(det.framework)}</span>
+              ${runtime ? `<code>${escapeHtml(runtime)}</code>` : ""}
+              ${cvesChecked ? "" : `<span class="muted">CVEs not checked</span>`}
+            </span>
+            <ul class="dash-why">${why}</ul>
+          </span>
+        </button>
+      </li>`;
+    })
+    .join("");
+  return `${sweep}<ul class="dash-attention">${items}</ul>`;
+}
+
+function renderFrameworks(s) {
+  if (!s.total) return `<p class="muted">No apps yet.</p>`;
+  const sorted = [...s.frameworks].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const max = sorted[0][1];
+  const bundled = ["electron", "cef", "chromiumbrowser", "nwjs"].reduce(
+    (acc, f) => acc + (s.frameworks.get(f) ?? 0),
+    0,
+  );
+  const rowsHtml = sorted
+    .map(
+      ([fw, n]) => `<button type="button" class="dash-fw" data-dash-framework="${escapeHtml(fw)}" title="Show ${escapeHtml(fw)} apps in the list">
+        <span class="framework-tag ${escapeHtml(fw)}">${escapeHtml(fw)}</span>
+        <span class="dash-fw-track"><span class="dash-fw-fill" style="width:${(n / max) * 100}%"></span></span>
+        <span class="dash-fw-n">${n}</span>
+      </button>`,
+    )
+    .join("");
+  return `
+    ${
+      bundled
+        ? `<p class="muted">${bundled} app(s) bundle their own Chromium engine and must each be updated separately to receive browser security fixes.</p>`
+        : ""
+    }
+    <div class="dash-fws">${rowsHtml}</div>`;
+}
+
+// Run `cve_lookup` for flagged apps that haven't been checked, one at a time
+// (NVD rate-limits hard), writing results into `detailCache` exactly where the
+// detail pane would — so the table badges and the pane pick them up too.
+async function runDashboardCveSweep() {
+  if (dashCveSweep) return;
+  const targets = postureSummary().attention.filter((a) => !a.cvesChecked).map((a) => a.det);
+  if (!targets.length) return;
+  dashCveSweep = { done: 0, total: targets.length, current: null };
+  scheduleDashboard();
+  for (const det of targets) {
+    // The list may have been cleared (Rescan) mid-sweep.
+    if (!rows.has(det.path)) continue;
+    dashCveSweep.current = appName(det);
+    scheduleDashboard();
+    try {
+      const cves = await invoke("cve_lookup", { versions: det.versions });
+      // Don't clobber a fresher entry the detail pane created meanwhile.
+      const entry = detailCache.get(det.path) ?? { detection: det };
+      if (!entry.cves || entry.cves.pending || entry.cves.error) entry.cves = cves;
+      detailCache.set(det.path, entry);
+      updateRowRisk(det.path);
+    } catch (err) {
+      console.warn("dashboard cve_lookup failed", appName(det), err);
+    }
+    dashCveSweep.done++;
+  }
+  dashCveSweep = null;
+  scheduleDashboard();
+}
+
+navDashboardBtn.addEventListener("click", () => showView(dashboardVisible() ? "apps" : "dashboard"));
+
+dashboardPanel.addEventListener("click", (e) => {
+  const open = e.target.closest("[data-dash-open]");
+  if (open) {
+    const entry = rows.get(open.dataset.dashOpen);
+    if (entry) {
+      showView("apps");
+      entry.row.scrollIntoView({ block: "nearest" });
+      void openDetail(entry.detection);
+    }
+    return;
+  }
+  const risk = e.target.closest("[data-dash-risk]");
+  const fw = e.target.closest("[data-dash-framework]");
+  if (risk || fw) {
+    // Jump to the list showing just that slice.
+    activeFilters.clear();
+    if (risk) setFilter("risk", risk.dataset.dashRisk);
+    else setFilter("framework", fw.dataset.dashFramework);
+    showView("apps");
+    return;
+  }
+  const action = e.target.closest("[data-dash-action]")?.dataset.dashAction;
+  if (action === "os-update") void invoke("open_os_update").catch(() => {});
+  else if (action === "cve-sweep") void runDashboardCveSweep();
+});
 
 // ---------- auto-update (CrabNebula Cloud) ----------
 // Checks the configured updater endpoint on boot. If a newer release is found
@@ -2583,5 +3096,7 @@ invoke("os_info")
     osBadge.title = info.note || label;
     osBadge.classList.toggle("os-alert", Boolean(info.outdated));
     osBadge.hidden = false;
+    osInfo = info;
+    scheduleDashboard();
   })
   .catch(() => {});

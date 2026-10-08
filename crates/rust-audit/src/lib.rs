@@ -113,6 +113,25 @@ pub fn audit(executable: &Path, root: Option<&Path>) -> RustAuditReport {
     report
 }
 
+/// List every distinct `(crate, version)` embedded in the app's
+/// `cargo-auditable` binaries — without the RustSec audit. Used by the license
+/// scan to resolve each crate's license. Deduplicated by name+version.
+pub fn list_crates(executable: &Path, root: Option<&Path>) -> Vec<AuditedCrate> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for path in candidate_binaries(executable, root) {
+        let Some(crates) = extract_file(&path) else {
+            continue;
+        };
+        for c in crates {
+            if seen.insert((c.name.clone(), c.version.clone())) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
 /// Extract audit data from a file via mmap (avoids reading large binaries fully
 /// into memory), skipping files over a sanity cap.
 fn extract_file(path: &Path) -> Option<Vec<AuditedCrate>> {

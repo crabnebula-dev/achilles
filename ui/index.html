@@ -20,6 +20,7 @@
     <h1 data-tauri-drag-region>Achilles</h1>
     <button id="os-badge" type="button" hidden title="Operating system"></button>
     <div id="status" data-tauri-drag-region>idle</div>
+    <button id="nav-dashboard" type="button" title="Security posture overview" aria-pressed="false">Dashboard</button>
     <button id="export-all" type="button" title="Export every row (and any detail you've opened) as JSON">Export JSON</button>
     <button id="settings" type="button" title="CVE source settings">Settings</button>
     <button id="rescan" type="button">Rescan</button>
@@ -175,6 +176,8 @@
   </dialog>
 
   <main>
+    <section id="dashboard-panel" hidden aria-label="Security posture dashboard"></section>
+
     <section id="list-panel">
       <table id="apps">
         <thead>

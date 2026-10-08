@@ -16,6 +16,9 @@ pub struct Dependency {
     pub name: String,
     pub version: String,
     pub source: DependencySource,
+    /// Declared license (SPDX where the lockfile records it); `None` when the
+    /// source doesn't carry one (v1 lockfiles / `package.json`).
+    pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ fn parse_package_lock(bytes: &[u8], out: &mut BTreeSet<Dependency>) {
                 name,
                 version: version.to_owned(),
                 source: DependencySource::PackageLock,
+                license: lock_license(entry),
             });
         }
         return;
@@ -93,11 +97,38 @@ fn walk_v1_deps(deps: &serde_json::Map<String, serde_json::Value>, out: &mut BTr
                 name: name.clone(),
                 version: version.to_owned(),
                 source: DependencySource::PackageLock,
+                license: lock_license(entry),
             });
         }
         if let Some(nested) = entry.get("dependencies").and_then(|v| v.as_object()) {
             walk_v1_deps(nested, out);
         }
+    }
+}
+
+/// Pull a license string from a lockfile package entry. npm records it as
+/// `"license"` (a string SPDX id/expression) — or, in older shapes, an object
+/// `{ "type": "MIT" }` or an array of such. Returns `None` when absent.
+fn lock_license(entry: &serde_json::Value) -> Option<String> {
+    let v = entry.get("license").or_else(|| entry.get("licenses"))?;
+    let s = match v {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Object(o) => o.get("type").and_then(|t| t.as_str()).unwrap_or("").trim().to_string(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(|e| match e {
+                serde_json::Value::String(s) => Some(s.trim().to_string()),
+                serde_json::Value::Object(o) => o.get("type").and_then(|t| t.as_str()).map(|s| s.trim().to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" OR "),
+        _ => return None,
+    };
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -126,6 +157,7 @@ fn parse_package_json(bytes: &[u8], out: &mut BTreeSet<Dependency>) {
                 name: name.clone(),
                 version: cleaned,
                 source: DependencySource::PackageJson,
+                license: None,
             });
         }
     }

@@ -343,6 +343,7 @@ pub fn run() {
             commands::crypto_load,
             commands::binary_headers,
             commands::library_cves,
+            commands::license_scan,
             commands::rust_audit,
             commands::os_info,
             commands::open_os_update,

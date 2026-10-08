@@ -1,0 +1,13 @@
+[package]
+name = "licenses"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+dirs = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }

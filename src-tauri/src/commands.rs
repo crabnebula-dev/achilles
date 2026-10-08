@@ -571,6 +571,175 @@ pub async fn library_cves(
     Ok(out)
 }
 
+// ---------- open-source license composition --------------------------
+
+/// Build the open-source license composition of an app: its runtime/framework,
+/// linked native libraries, bundled npm dependencies, and embedded Rust crates,
+/// each classified by copyleft strength — plus any license/notice files the
+/// bundle ships. `dependencies` is the frontend's already-parsed npm list (with
+/// per-package licenses from the lockfile); the Rust half hits crates.io, so the
+/// whole thing runs on demand.
+#[tauri::command]
+pub async fn license_scan(
+    path: PathBuf,
+    root: Option<PathBuf>,
+    executable: Option<PathBuf>,
+    versions: detect::Versions,
+    framework: Option<String>,
+    dependencies: Option<Vec<static_scan::Dependency>>,
+) -> Result<licenses::LicenseComposition, String> {
+    let exe = executable.unwrap_or_else(|| path.clone());
+    let root = root.unwrap_or_else(|| path.clone());
+
+    let mut components: Vec<licenses::LicenseComponent> = Vec::new();
+
+    // 1) Runtimes/frameworks — one component per populated runtime version, so an
+    // Electron app surfaces Electron + Chromium + Node, etc.
+    let runtimes: [(&str, Option<String>); 14] = [
+        ("electron", versions.electron.clone()),
+        ("chromium", versions.chromium.clone()),
+        ("node", versions.node.clone()),
+        ("tauri", versions.tauri.clone()),
+        ("deno", versions.deno.clone()),
+        ("cef", versions.cef.clone()),
+        ("nwjs", versions.nwjs.clone()),
+        ("flutter", versions.flutter.clone()),
+        ("qt", versions.qt.clone()),
+        ("react_native", versions.react_native.clone()),
+        ("wails", versions.wails.clone()),
+        ("sciter", versions.sciter.clone()),
+        ("java", versions.java.clone()),
+        ("webkit", versions.webkit.clone()),
+    ];
+    let mut any_runtime = false;
+    for (key, ver) in runtimes {
+        if ver.is_some() {
+            if let Some(c) = licenses::runtime_component(key, ver) {
+                components.push(c);
+                any_runtime = true;
+            }
+        }
+    }
+    // Fall back to the framework verdict when no runtime version was populated.
+    if !any_runtime {
+        if let Some(fw) = framework.as_deref() {
+            if let Some(c) = licenses::runtime_component(fw, None) {
+                components.push(c);
+            }
+        }
+    }
+
+    // 2) Linked native libraries (from the static crypto/library evidence).
+    {
+        let exe2 = exe.clone();
+        let root2 = root.clone();
+        let evidence =
+            tokio::task::spawn_blocking(move || cbom::static_evidence(&exe2, Some(&root2)))
+                .await
+                .map_err(|e| e.to_string())?;
+        let mut seen = std::collections::HashSet::new();
+        for ev in &evidence {
+            if let cbom::CryptoEvidence::Library { name, version, .. } = ev {
+                if seen.insert(name.clone()) {
+                    if let Some(c) = licenses::native_component(name, version.clone()) {
+                        components.push(c);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3) npm dependencies (licenses parsed from the lockfile by the frontend).
+    if let Some(deps) = dependencies {
+        for d in deps {
+            components.push(licenses::npm_component(
+                &d.name,
+                Some(d.version),
+                d.license.as_deref().unwrap_or(""),
+            ));
+        }
+    }
+
+    // 4) Embedded Rust crates → crates.io license resolution.
+    {
+        let exe3 = exe.clone();
+        let root3 = root.clone();
+        let crates = tokio::task::spawn_blocking(move || {
+            rust_audit::list_crates(&exe3, Some(&root3))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if !crates.is_empty() {
+            let pairs: Vec<(String, String)> = crates
+                .iter()
+                .map(|c| (c.name.clone(), c.version.to_string()))
+                .collect();
+            let resolved = licenses::crates_io::resolve(&pairs).await;
+            for c in crates {
+                let key = format!("{}@{}", c.name, c.version);
+                let lic = resolved.get(&key).map(String::as_str).unwrap_or("");
+                components.push(licenses::rust_component(&c.name, Some(c.version.to_string()), lic));
+            }
+        }
+    }
+
+    // 5) Bundled license / notice files the app ships.
+    let notice_files = tokio::task::spawn_blocking(move || find_notice_files(&root))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(licenses::compose(components, notice_files))
+}
+
+/// Walk a bundle for license / notice files (bounded), returning paths relative
+/// to the bundle root. Matches common names shipped by apps and their runtimes.
+fn find_notice_files(root: &std::path::Path) -> Vec<String> {
+    const MAX_FILES: usize = 200;
+    const MAX_VISIT: usize = 20_000;
+    let mut out = Vec::new();
+    let mut visited = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if out.len() >= MAX_FILES || visited >= MAX_VISIT {
+                out.sort();
+                return out;
+            }
+            visited += 1;
+            let p = entry.path();
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                stack.push(p);
+                continue;
+            }
+            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                if is_notice_file(name) {
+                    let rel = p.strip_prefix(root).unwrap_or(&p);
+                    out.push(rel.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether a filename looks like a license / third-party-notice file.
+fn is_notice_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let stem = lower.split('.').next().unwrap_or(&lower);
+    matches!(
+        stem,
+        "license" | "licenses" | "licence" | "licences" | "copying" | "copyright" | "notice"
+            | "notices" | "credits" | "third-party-notices" | "third_party_notices"
+    ) || lower.contains("license")
+        || lower.contains("licence")
+        || lower.contains("third-party")
+        || lower.contains("third_party")
+}
+
 // ---------- operating system version + update ------------------------
 
 /// Operating-system name/version for the header badge, with a best-effort

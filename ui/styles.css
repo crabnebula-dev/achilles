@@ -649,6 +649,199 @@ dialog::backdrop {
 #euvd-snapshot-settings label { display: block; margin: 6px 0; }
 #euvd-snapshot-settings p { margin: 6px 0; }
 
+/* ==================== posture dashboard ====================
+   An alternate view inside <main>: when active it takes the whole grid and
+   the list/detail panes step aside (their state is kept for the way back). */
+main[data-view="dashboard"],
+main[data-view="dashboard"]:has(#detail-panel:not([hidden])) {
+  grid-template-columns: 1fr;
+}
+main[data-view="dashboard"] > #list-panel,
+main[data-view="dashboard"] > #detail-panel {
+  display: none;
+}
+#dashboard-panel[hidden] { display: none; }
+#dashboard-panel {
+  overflow: auto;
+  padding: var(--space-4);
+}
+#nav-dashboard[aria-pressed="true"] { border-color: var(--accent); }
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.dash-card {
+  background: var(--bg-2);
+  border: 1px solid var(--bg-3);
+  border-radius: 8px;
+  padding: var(--pad-panel);
+  min-width: 0;
+}
+.dash-wide { grid-column: 1 / -1; }
+.dash-card h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dash-card p { margin: var(--space-2) 0; }
+.dash-card .muted { color: var(--fg-2); }
+.dash-footnote { font-size: var(--text-xs); }
+
+.dash-verdict { border-left: 3px solid var(--fg-2); }
+.dash-verdict.ok { border-left-color: var(--ok); }
+.dash-verdict.warn { border-left-color: var(--warn); }
+.dash-verdict.bad { border-left-color: var(--bad); }
+.dash-headline {
+  font-size: 18px;
+  font-weight: 600;
+}
+.dash-verdict.ok .dash-headline { color: var(--ok); }
+.dash-verdict.warn .dash-headline { color: var(--warn); }
+.dash-verdict.bad .dash-headline { color: var(--bad); }
+
+.dash-reasons,
+.dash-why {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+}
+.dash-reasons li.bad, .dash-why li.bad { color: var(--bad); }
+.dash-reasons li.warn, .dash-why li.warn { color: var(--warn); }
+.dash-why li.muted { color: var(--fg-2); }
+
+.dash-os-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.dash-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-3);
+  border-radius: 6px;
+  text-align: left;
+}
+.dash-tile-n {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.dash-tile-label { font-size: var(--text-xs); color: var(--fg-2); }
+.dash-tile.bad .dash-tile-n { color: var(--bad); }
+.dash-tile.warn .dash-tile-n { color: var(--warn); }
+.dash-tile.ok .dash-tile-n { color: var(--ok); }
+.dash-tile.unknown .dash-tile-n { color: var(--fg-2); }
+
+.dash-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin-top: var(--space-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.dash-bar-seg { flex-basis: 0; min-width: 4px; }
+.dash-bar-seg.bad { background: var(--bad); }
+.dash-bar-seg.warn { background: var(--warn); }
+.dash-bar-seg.ok { background: var(--ok); }
+.dash-bar-seg.unknown { background: var(--bg-3); }
+
+.dash-attention {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.dash-app {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border-radius: 6px;
+  text-align: left;
+}
+@media (hover: hover) {
+  .dash-app:hover { background: var(--bg-3); }
+}
+.dash-app > .risk { margin-top: 2px; flex-shrink: 0; }
+.dash-app-main { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.dash-app-name {
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dash-app-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+.dash-app-meta code { font-family: var(--mono); color: var(--fg-2); }
+.dash-why { font-size: var(--text-sm); }
+
+.dash-fws { display: flex; flex-direction: column; gap: 2px; }
+.dash-fw {
+  display: grid;
+  grid-template-columns: 9em 1fr 3em;
+  align-items: center;
+  gap: var(--space-3);
+  background: transparent;
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+}
+@media (hover: hover) {
+  .dash-fw:hover { background: var(--bg-3); }
+}
+.dash-fw .framework-tag { justify-self: start; }
+.dash-fw-track {
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.dash-fw-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+.dash-fw-n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+@media (width < 780px) {
+  #dashboard-panel {
+    padding: var(--space-3) calc(var(--space-4) + var(--safe-right))
+      calc(var(--space-3) + var(--safe-bottom)) calc(var(--space-4) + var(--safe-left));
+    overscroll-behavior: contain;
+  }
+  .dash-grid { grid-template-columns: 1fr; }
+  .dash-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dash-fw { grid-template-columns: 7em 1fr 2.5em; }
+}
+
 /* ==================== narrow viewports (width < 780px) ====================
    780px is the desktop Tauri window's minWidth, so nothing in here fires in
    the desktop app at zoom 1.0 — the browser/PWA build is the only consumer.
