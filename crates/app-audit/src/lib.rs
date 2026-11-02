@@ -63,6 +63,11 @@ pub enum AuditError {
 /// (where sibling files live), with primary `executable`. Returns a best-effort
 /// report; every subcomponent has its own "nothing found" representation rather
 /// than failing the whole audit.
+/// `codesign` summary for any file or bundle (macOS; unsigned elsewhere).
+pub async fn code_signature(path: &Path) -> CodeSignature {
+    macos::code_signature_of(path).await
+}
+
 pub async fn audit(
     path: &Path,
     root: &Path,

@@ -12,6 +12,7 @@ dependencies = [
  "cve",
  "detect",
  "dirs 6.0.0",
+ "futures",
  "jev",
  "licenses",
  "netmon",

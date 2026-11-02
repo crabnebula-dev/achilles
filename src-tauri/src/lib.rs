@@ -346,7 +346,7 @@ pub fn run() {
             commands::library_cves,
             commands::license_scan,
             watchdog::jev_status,
-            watchdog::jev_assess,
+            watchdog::watchdog_scan,
             commands::rust_audit,
             commands::os_info,
             commands::open_os_update,

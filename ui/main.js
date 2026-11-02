@@ -1229,8 +1229,8 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   // Open-source license composition (on-demand; Rust crates hit crates.io).
   parts.push(renderLicenses(det));
 
-  // On-device behaviour assessment (Jev; on demand, experimental).
-  parts.push(renderJev(det));
+  // Background items attributed to this app (behaviour watchdog).
+  parts.push(renderWatchdog(det));
 
   if (audit && !audit.error) {
     // The audit payload is platform-tagged (`platform`: macos | windows | linux).
@@ -2069,20 +2069,27 @@ detailBody.addEventListener("click", (e) => {
     .finally(() => refreshLicenses(det));
 });
 
-// ---------- behaviour watchdog (Jev) — LOCAL ONLY until November ---------
-// Asks an on-device language model (see crates/jev) whether an app's observed
-// behaviour — persistence, browser bridges, signing, entitlements, network
-// destinations — is expected for an app of its kind. An experimental opinion:
-// it is shown next to, never folded into, the risk rating.
+// ---------- behaviour watchdog — LOCAL ONLY until November ----------------
+// Machine-wide: every launchd agent/daemon and browser native-messaging host,
+// attributed to an installed app (bundle, signing team, package manager, or
+// optionally Jev — an on-device model — for name-only matches), checked
+// against deterministic rules, and diffed with the previous scan. See
+// crates/jev/src/watchdog.
 
-const JEV_VERDICT = {
-  normal: { label: "expected", css: "ok" },
-  questionable: { label: "unusual", css: "warn" },
-  bad: { label: "looks abusive", css: "bad" },
+const WD_VERDICT = {
+  normal: { label: "ok", css: "ok" },
+  questionable: { label: "review", css: "warn" },
+  bad: { label: "suspicious", css: "bad" },
+};
+const WD_KIND = {
+  userAgent: "Login agent",
+  globalAgent: "Login agent (all users)",
+  daemon: "Root daemon",
+  browserBridge: "Browser bridge",
 };
 const JEV_NOT_CACHED = "jev-model-not-cached";
 
-/** `jev_status` result: { model, cached, loaded } (null until known / web build). */
+/** `jev_status`: { model, cached, loaded } (null until known / web build). */
 let jevModel = null;
 function refreshJevStatus() {
   return invoke("jev_status")
@@ -2094,208 +2101,163 @@ function refreshJevStatus() {
     });
 }
 
-const jevState = new Map();
-function jevFor(path) {
-  if (!jevState.has(path)) {
-    // idle | running | needs-model | done
-    jevState.set(path, { status: "idle", result: null, error: null });
-  }
-  return jevState.get(path);
-}
+// idle | running | needs-model | done | error
+const watchdog = { status: "idle", report: null, error: null, useModel: false };
 
-// Hosts seen in this session's network capture for the app, if any.
-function jevDestinations(det) {
-  const st = cryptoState.get(det.path);
-  if (!st?.dests?.size) return null;
-  return [...st.dests.values()].map((d) => `${d.hostname || d.sni || d.remoteIp}:${d.port}`);
-}
-
-async function runJev(det, allowDownload) {
-  const st = jevFor(det.path);
-  st.status = "running";
-  st.error = null;
-  refreshJev(det);
+async function runWatchdog(allowDownload = false) {
+  watchdog.status = "running";
+  watchdog.error = null;
+  refreshWatchdogViews();
+  const apps = [...rows.values()].map(({ detection: d }) => ({
+    name: appName(d),
+    bundleId: d.bundle_id ?? null,
+    path: d.path,
+  }));
   try {
-    st.result = await invoke("jev_assess", {
-      path: det.path,
-      root: det.root,
-      bundleId: det.bundle_id ?? null,
-      executable: det.executable ?? null,
-      name: appName(det),
-      framework: det.framework ?? null,
-      destinations: jevDestinations(det),
-      allowDownload,
-    });
-    st.status = "done";
-    if (jevModel) jevModel.cached = jevModel.loaded = true;
+    watchdog.report = await invoke("watchdog_scan", { apps, useModel: watchdog.useModel, allowDownload });
+    watchdog.status = "done";
+    if (watchdog.useModel && jevModel) jevModel.cached = true;
   } catch (err) {
     const msg = String(err);
-    st.status = msg.includes(JEV_NOT_CACHED) ? "needs-model" : "idle";
-    st.error = st.status === "idle" ? msg : null;
+    watchdog.status = msg.includes(JEV_NOT_CACHED) ? "needs-model" : "error";
+    watchdog.error = watchdog.status === "error" ? msg : null;
   }
-  refreshJev(det);
-  return st;
+  refreshWatchdogViews();
 }
 
-function jevDownloadNote() {
-  const model = jevModel?.model ?? "the Jev model";
-  return `Jev needs <code>${escapeHtml(model)}</code> (a ~2.5 GB download from Hugging Face, once). After that everything runs on this device — nothing about your apps leaves it — and the model only occupies memory while it's assessing.`;
-}
-
-function renderJev(det) {
-  return `<h3>Behaviour <span class="muted">(Jev, experimental)</span></h3><div id="jev-section">${renderJevInner(jevFor(det.path))}</div>`;
-}
-
-function renderJevInner(st) {
-  if (st.status === "running") {
-    return `<p class="muted">assessing… ${
-      jevModel?.loaded ? "" : "(loading the model first)"
-    }</p>`;
-  }
-  if (st.status === "needs-model") {
-    return `<p class="muted">${jevDownloadNote()}</p><p><button type="button" data-jev="download">Download model &amp; assess</button></p>`;
-  }
-  if (st.status === "done" && st.result) return renderJevResult(st.result);
-  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
-  return `${err}<p class="muted">Ask an on-device language model whether this app's behaviour — what it installs, the rights it holds, who it talks to — is expected for an app of its kind. <button type="button" data-jev="run">Assess behaviour</button></p>`;
-}
-
-const JEV_ASPECT = {
-  backgroundActivity: "Background activity",
-  codeIntegrity: "Code integrity",
-  browserIntegration: "Browser integration",
-  privacyAccess: "Privacy & system access",
-  networkDestinations: "Network destinations",
-};
-
-// A finding's answer: the most probable of concern / fine / insufficient.
-function jevAnswer(f) {
-  if (f.flagged) return { label: "concern", css: "warn" };
-  return f.insufficient > f.fine ? { label: "unclear", css: "unknown" } : { label: "fits purpose", css: "ok" };
-}
-
-function renderJevResult(r) {
-  const v = JEV_VERDICT[r.verdict] ?? JEV_VERDICT.questionable;
-  const pct = (p) => `${Math.round(p * 100)}%`;
-  const findings = r.findings.length
-    ? `<ul class="jev-findings">${r.findings
-        .map((f) => {
-          const a = jevAnswer(f);
-          return `<li>
-            <span class="risk ${a.css}">${a.label}</span>
-            <strong>${escapeHtml(JEV_ASPECT[f.aspect] ?? f.aspect)}</strong>
-            <span class="muted">concern ${pct(f.concern)}</span>
-            <details><summary class="muted">${f.facts.length} fact(s)</summary>
-              <p class="muted">${escapeHtml(f.question)}</p>
-              <ul class="jev-facts">${f.facts.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
-            </details>
-          </li>`;
-        })
-        .join("")}</ul>`
-    : `<p class="muted">Nothing noteworthy was observed, so there was nothing to ask the model about.</p>`;
-  const components = r.components?.length
-    ? `<p class="muted">Context: ${r.components.map(escapeHtml).join(" ")}</p>`
-    : "";
-  return `
-    <p><span class="risk ${v.css}">${v.label}</span>
-      <span class="muted">${r.findings.filter((f) => f.flagged).length} of ${r.findings.length} aspect(s) raised a concern</span></p>
-    ${findings}${components}
-    <p class="muted">A language model's opinion, not a verdict — it doesn't change the risk rating.
-      <button type="button" data-jev="run">Re-assess</button></p>`;
-}
-
-function refreshJev(det) {
+function refreshWatchdogViews() {
   scheduleDashboard();
-  if (currentDetail?.path !== det.path) return;
-  const el = document.querySelector("#jev-section");
-  if (el) el.innerHTML = renderJevInner(jevFor(det.path));
+  if (currentDetail) {
+    const el = document.querySelector("#wd-section");
+    if (el) el.innerHTML = renderWatchdogForApp(currentDetail);
+  }
+}
+
+function wdOwner(owner) {
+  switch (owner.by) {
+    case "bundle":
+      return `inside ${escapeHtml(owner.app)}`;
+    case "team":
+      return `signed by ${escapeHtml(owner.app)}'s developer`;
+    case "apple":
+      return "Apple";
+    case "packageManager":
+      return `installed by ${escapeHtml(owner.manager)}`;
+    case "model":
+      return `looks like ${escapeHtml(owner.app)} <span class="muted">(Jev, ${Math.round(owner.confidence * 100)}%)</span>`;
+    default:
+      return `<span class="warn">no owner found</span>`;
+  }
+}
+
+function wdItemRow(r, isNew) {
+  const v = WD_VERDICT[r.verdict] ?? WD_VERDICT.questionable;
+  const signals = r.signals
+    .filter((s) => s.severity !== "info" || r.verdict === "normal")
+    .map((s) => `<li class="${s.severity === "high" ? "bad" : s.severity === "medium" ? "warn" : "muted"}">${escapeHtml(s.text)}</li>`)
+    .join("");
+  return `<li class="wd-item">
+      <span class="risk ${v.css}">${v.label}</span>
+      <span class="dash-app-main">
+        <span class="dash-app-name"><code>${escapeHtml(r.item.label ?? r.item.program)}</code>
+          ${isNew ? `<span class="risk warn">new</span>` : ""}</span>
+        <span class="dash-app-meta muted">${WD_KIND[r.item.kind.type] ?? r.item.kind.type}${
+          r.item.kind.browser ? ` · ${escapeHtml(r.item.kind.browser)}` : ""
+        } · ${wdOwner(r.owner)}</span>
+        <span class="dash-app-meta muted"><code>${escapeHtml(r.item.program)}</code></span>
+        ${signals ? `<ul class="dash-why">${signals}</ul>` : ""}
+      </span>
+    </li>`;
+}
+
+function wdModelNote() {
+  const model = jevModel?.model ?? "the Jev model";
+  return `Optional: let Jev (<code>${escapeHtml(model)}</code>, ~1.1 GB, downloaded once) suggest an owner for items no signature ties to an app — it catches impersonators like a fake "Chrome updater". It only loads when an item needs it, runs on this device, and is unloaded afterwards.`;
+}
+
+function renderWatchdogCard() {
+  const r = watchdog.report;
+  let body;
+  if (watchdog.status === "running") {
+    body = `<p class="muted">Inventorying background items and checking signatures…</p>`;
+  } else if (watchdog.status === "needs-model") {
+    body = `<p class="muted">${wdModelNote()}</p>
+      <p><button type="button" data-dash-action="wd-download">Download model &amp; run</button>
+         <button type="button" data-dash-action="wd-no-model">Run without it</button></p>`;
+  } else if (r) {
+    const added = new Set(r.changes.filter((c) => c.kind === "added").map((c) => c.source));
+    const changed = r.changes.filter((c) => c.kind === "programChanged");
+    const removed = r.changes.filter((c) => c.kind === "removed");
+    const flagged = r.items
+      .filter((x) => x.verdict !== "normal")
+      .sort((a, b) => (a.verdict === "bad" ? -1 : 0) - (b.verdict === "bad" ? -1 : 0));
+    const counts = { normal: 0, questionable: 0, bad: 0 };
+    for (const x of r.items) counts[x.verdict]++;
+    const since = r.baselineAt
+      ? `Since the last scan (${escapeHtml(formatRelativeTime(new Date(r.baselineAt * 1000).toISOString()))}): ${
+          r.changes.length
+            ? `${added.size} new, ${changed.length} changed, ${removed.length} removed.`
+            : "nothing changed."
+        }`
+      : "First scan — later scans will show what changed.";
+    body = `
+      <p>${Object.entries(counts)
+        .map(([k, n]) => `<span class="risk ${WD_VERDICT[k].css}">${n} ${WD_VERDICT[k].label}</span>`)
+        .join(" ")} <span class="muted">of ${r.items.length} background item(s)</span></p>
+      <p class="muted">${since}</p>
+      ${
+        flagged.length
+          ? `<ul class="dash-attention">${flagged.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>`
+          : `<p class="ok">Nothing looks out of place.</p>`
+      }
+      ${
+        changed.length
+          ? `<p class="warn">Changed program: ${changed.map((c) => `<code>${escapeHtml(c.source)}</code>`).join(", ")}</p>`
+          : ""
+      }
+      <details class="binmeta-list"><summary class="muted">All ${r.items.length} background item(s)</summary>
+        <ul class="dash-attention">${r.items.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>
+      </details>
+      <p><button type="button" data-dash-action="wd-run">Scan again</button></p>`;
+  } else {
+    const err = watchdog.error ? `<p class="bad">${escapeHtml(watchdog.error)}</p>` : "";
+    body = `${err}<p class="muted">Lists everything on this machine that starts in the background or bridges into a browser, checks who signed it and which app it belongs to, and flags the patterns malware uses to stay put — scripts, hidden folders, Apple look-alike names, unsigned programs, orphans.</p>
+      <p><button type="button" data-dash-action="wd-run">Run watchdog</button></p>`;
+  }
+  const modelToggle =
+    watchdog.status === "running" || watchdog.status === "needs-model"
+      ? ""
+      : `<label class="muted wd-toggle"><input type="checkbox" data-dash-action="wd-toggle-model" ${
+          watchdog.useModel ? "checked" : ""
+        }/> Use Jev for ownership <span class="muted">(optional, on-device)</span></label>`;
+  return `<article class="dash-card dash-wide">
+      <h2>Behaviour watchdog <span class="muted">experimental</span></h2>
+      ${body}${modelToggle}
+    </article>`;
+}
+
+// Detail pane: the background items attributed to this app.
+function renderWatchdog(det) {
+  return `<h3>Background items <span class="muted">(watchdog)</span></h3><div id="wd-section">${renderWatchdogForApp(det)}</div>`;
+}
+
+function renderWatchdogForApp(det) {
+  const r = watchdog.report;
+  if (!r) {
+    return watchdog.status === "running"
+      ? `<p class="muted">scanning…</p>`
+      : `<p class="muted">Run the behaviour watchdog to see what this app keeps running in the background. <button type="button" data-wd="run">Run watchdog</button></p>`;
+  }
+  const name = appName(det);
+  const mine = r.items.filter((x) => x.owner.app === name);
+  if (!mine.length) return `<p class="muted">No background items or browser bridges belong to this app.</p>`;
+  const added = new Set(r.changes.filter((c) => c.kind === "added").map((c) => c.source));
+  return `<ul class="dash-attention">${mine.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>`;
 }
 
 detailBody.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-jev]");
-  if (!btn || !currentDetail) return;
-  void runJev(currentDetail, btn.dataset.jev === "download");
+  if (e.target.closest("[data-wd]")) void runWatchdog();
 });
-
-// Dashboard sweep: assess every app that hasn't been, one at a time (the
-// model is single-threaded; ~3.5 s per app on Apple silicon).
-let jevSweep = null;
-async function runJevSweep(allowDownload) {
-  if (jevSweep) return;
-  const targets = [...rows.values()]
-    .map((r) => r.detection)
-    .filter((d) => jevFor(d.path).status !== "done");
-  jevSweep = { done: 0, total: targets.length, current: null };
-  scheduleDashboard();
-  for (const det of targets) {
-    if (!rows.has(det.path)) continue; // cleared by a rescan mid-sweep
-    jevSweep.current = appName(det);
-    scheduleDashboard();
-    const st = await runJev(det, allowDownload);
-    if (st.status === "needs-model") break; // ask once, not per app
-    allowDownload = false; // downloaded (or failed) on the first app
-    jevSweep.done++;
-  }
-  jevSweep = null;
-  scheduleDashboard();
-}
-
-function renderJevCard() {
-  const assessed = [];
-  for (const { detection: det } of rows.values()) {
-    const st = jevState.get(det.path);
-    if (st?.status === "done" && st.result) assessed.push({ det, r: st.result });
-  }
-  const needsModel = [...jevState.values()].some((s) => s.status === "needs-model") || jevModel?.cached === false;
-  const counts = { normal: 0, questionable: 0, bad: 0 };
-  for (const { r } of assessed) counts[r.verdict]++;
-  const concerns = (r) => r.findings.filter((f) => f.flagged);
-  const maxConcern = (r) => Math.max(0, ...concerns(r).map((f) => f.concern));
-  const flagged = assessed
-    .filter(({ r }) => r.verdict !== "normal")
-    .sort((a, b) => concerns(b.r).length - concerns(a.r).length || maxConcern(b.r) - maxConcern(a.r));
-
-  let controls;
-  if (jevSweep) {
-    controls = `<p class="muted">Assessing ${jevSweep.done}/${jevSweep.total}${
-      jevSweep.current ? ` — ${escapeHtml(jevSweep.current)}` : ""
-    }</p>`;
-  } else if (needsModel) {
-    controls = `<p class="muted">${jevDownloadNote()}</p><p><button type="button" data-dash-action="jev-download">Download model &amp; assess all apps</button></p>`;
-  } else {
-    const remaining = rows.size - assessed.length;
-    controls = remaining
-      ? `<p><button type="button" data-dash-action="jev-sweep">Assess ${assessed.length ? `remaining ${remaining}` : `all ${remaining}`} app(s)</button>
-          <span class="muted">runs on this device; the model is unloaded again when done</span></p>`
-      : "";
-  }
-  const summary = assessed.length
-    ? `<p>${Object.entries(counts)
-        .map(([k, n]) => `<span class="risk ${JEV_VERDICT[k].css}">${n} ${JEV_VERDICT[k].label}</span>`)
-        .join(" ")} <span class="muted">of ${assessed.length} assessed</span></p>`
-    : `<p class="muted">An on-device language model judges whether each app's behaviour — what it installs, the rights it holds, who it talks to — is expected for an app of its kind. Experimental, and kept separate from the risk rating.</p>`;
-  const list = flagged.length
-    ? `<ul class="dash-attention">${flagged
-        .map(({ det, r }) => {
-          const v = JEV_VERDICT[r.verdict];
-          return `<li><button type="button" class="dash-app" data-dash-open="${escapeHtml(det.path)}" title="Open this app">
-            <span class="risk ${v.css}">${v.label}</span>
-            <span class="dash-app-main">
-              <span class="dash-app-name">${escapeHtml(appName(det))}</span>
-              <ul class="dash-why">${concerns(r)
-                .map((f) => `<li class="warn">${escapeHtml(JEV_ASPECT[f.aspect] ?? f.aspect)}: ${escapeHtml(f.facts[0] ?? "")}</li>`)
-                .join("")}</ul>
-            </span></button></li>`;
-        })
-        .join("")}</ul>`
-    : assessed.length
-      ? `<p class="muted">Nothing flagged so far.</p>`
-      : "";
-  return `<article class="dash-card dash-wide">
-      <h2>Behaviour watchdog <span class="muted">Jev · experimental</span></h2>
-      ${summary}${controls}${list}
-    </article>`;
-}
 
 detailBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-rustaudit]");
@@ -2550,7 +2512,8 @@ function clearList() {
   // keeps showing its pre-rescan audit/CVE payload (e.g. an old runtime
   // version and the CVEs that went with it) after the app has been updated.
   detailCache.clear();
-  jevState.clear();
+  watchdog.report = null;
+  watchdog.status = "idle";
   tbody.replaceChildren();
   detailPanel.hidden = true;
   currentDetail = null;
@@ -3080,7 +3043,7 @@ function renderDashboard() {
         ${renderAttention(s)}
       </article>
 
-      ${renderJevCard()}
+      ${renderWatchdogCard()}
 
       <article class="dash-card dash-wide">
         <h2>Framework mix</h2>
@@ -3237,8 +3200,14 @@ dashboardPanel.addEventListener("click", (e) => {
   const action = e.target.closest("[data-dash-action]")?.dataset.dashAction;
   if (action === "os-update") void invoke("open_os_update").catch(() => {});
   else if (action === "cve-sweep") void runDashboardCveSweep();
-  else if (action === "jev-sweep") void runJevSweep(false);
-  else if (action === "jev-download") void runJevSweep(true);
+  else if (action === "wd-run") void runWatchdog(false);
+  else if (action === "wd-download") void runWatchdog(true);
+  else if (action === "wd-no-model") {
+    watchdog.useModel = false;
+    void runWatchdog(false);
+  } else if (action === "wd-toggle-model") {
+    watchdog.useModel = e.target.checked;
+  }
 });
 
 // ---------- auto-update (CrabNebula Cloud) ----------
