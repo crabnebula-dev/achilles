@@ -104,3 +104,4 @@ rust-audit = { path = "crates/rust-audit" }
 binmeta = { path = "crates/binmeta" }
 pkg = { path = "crates/pkg" }
 licenses = { path = "crates/licenses" }
+jev = { path = "crates/jev" }

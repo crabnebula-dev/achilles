@@ -57,11 +57,20 @@ struct ManifestShape {
 /// Scan every known browser's `NativeMessagingHosts/` dir. Return every
 /// manifest whose `path` lives under `app_path`.
 pub fn scan(app_path: &Path) -> Vec<NativeMessagingHost> {
+    let app_str = app_path.to_string_lossy().into_owned();
+    scan_all()
+        .into_iter()
+        .filter(|h| h.target_path.starts_with(&app_str))
+        .collect()
+}
+
+/// Every native-messaging-host manifest in every known browser profile,
+/// whichever app (if any) it points into.
+pub fn scan_all() -> Vec<NativeMessagingHost> {
     let Some(home) = dirs_home() else {
         return Vec::new();
     };
     let support = home.join("Library/Application Support");
-    let app_str = app_path.to_string_lossy().into_owned();
 
     let mut out = Vec::new();
     for (display_name, rel) in BROWSER_DIRS {
@@ -83,11 +92,6 @@ pub fn scan(app_path: &Path) -> Vec<NativeMessagingHost> {
             let Some(target) = manifest.path.as_deref() else {
                 continue;
             };
-            // Only keep manifests that point *into* this app's bundle.
-            if !target.starts_with(&app_str) {
-                continue;
-            }
-
             let (created_at, modified_at) = read_timestamps(&path);
             // Merge `allowed_origins` + `allowed_extensions` so Firefox's
             // different schema doesn't silently vanish.

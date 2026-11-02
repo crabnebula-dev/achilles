@@ -24,6 +24,17 @@ pub struct MacosAudit {
     pub asar_integrity: Option<Vec<AsarIntegrityCheck>>,
 }
 
+/// `codesign` summary for any path (no-op default without the `codesign` feature).
+pub async fn code_signature_of(path: &Path) -> CodeSignature {
+    #[cfg(feature = "codesign")]
+    return code_signature::read(path).await;
+    #[cfg(not(feature = "codesign"))]
+    {
+        let _ = path;
+        CodeSignature::default()
+    }
+}
+
 /// Audit the `.app` bundle at `app_path`. Signature + entitlements come from
 /// shelling out to `codesign` (the `codesign` feature, native-only); on builds
 /// without it (e.g. wasm) those fields are left at their defaults and only the

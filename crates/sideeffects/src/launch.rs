@@ -101,3 +101,74 @@ fn extract_program(dict: &plist::Dictionary) -> Option<String> {
     }
     None
 }
+
+/// One launchd registration, whichever app (if any) it belongs to.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PersistenceEntry {
+    pub scope: LaunchScope,
+    pub plist_path: PathBuf,
+    pub label: Option<String>,
+    /// `Program`, or `ProgramArguments[0]`.
+    pub program: String,
+    /// The full `ProgramArguments` (empty when only `Program` is set) — a
+    /// `/bin/sh -c …` launcher only shows its payload here.
+    pub arguments: Vec<String>,
+    pub run_at_load: bool,
+    pub keep_alive: bool,
+    pub modified_at: Option<u64>,
+}
+
+/// Every agent / daemon in the user, global and system-daemon directories.
+pub fn scan_all() -> Vec<PersistenceEntry> {
+    let mut dirs: Vec<(LaunchScope, PathBuf)> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push((LaunchScope::UserAgent, PathBuf::from(&home).join("Library/LaunchAgents")));
+    }
+    dirs.push((LaunchScope::GlobalAgent, PathBuf::from("/Library/LaunchAgents")));
+    dirs.push((LaunchScope::Daemon, PathBuf::from("/Library/LaunchDaemons")));
+
+    let mut out = Vec::new();
+    for (scope, dir) in dirs {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("plist") {
+                continue;
+            }
+            let Ok(plist_value) = plist::Value::from_file(&path) else {
+                continue;
+            };
+            let Some(dict) = plist_value.as_dictionary() else {
+                continue;
+            };
+            let Some(program) = extract_program(dict) else {
+                continue;
+            };
+            let arguments = dict
+                .get("ProgramArguments")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_string().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            out.push(PersistenceEntry {
+                scope,
+                label: dict.get("Label").and_then(|v| v.as_string()).map(str::to_owned),
+                program,
+                arguments,
+                run_at_load: dict.get("RunAtLoad").and_then(|v| v.as_boolean()).unwrap_or(false),
+                keep_alive: matches!(
+                    dict.get("KeepAlive"),
+                    Some(plist::Value::Boolean(true)) | Some(plist::Value::Dictionary(_))
+                ),
+                modified_at: fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()),
+                plist_path: path,
+            });
+        }
+    }
+    out
+}

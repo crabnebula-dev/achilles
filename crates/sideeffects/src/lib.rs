@@ -33,6 +33,23 @@ mod browsers;
 mod bundle_internal;
 #[cfg(target_os = "macos")]
 mod launch;
+#[cfg(target_os = "macos")]
+pub use launch::PersistenceEntry;
+
+/// Every launchd agent/daemon on the machine (macOS; empty elsewhere for now).
+#[cfg(target_os = "macos")]
+pub fn all_launch_items() -> Vec<PersistenceEntry> {
+    launch::scan_all()
+}
+
+/// Every browser native-messaging host on the machine (macOS; empty elsewhere
+/// for now).
+pub fn all_native_messaging_hosts() -> Vec<NativeMessagingHost> {
+    #[cfg(target_os = "macos")]
+    return browsers::scan_all();
+    #[cfg(not(target_os = "macos"))]
+    Vec::new()
+}
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

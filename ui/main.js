@@ -1229,6 +1229,9 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   // Open-source license composition (on-demand; Rust crates hit crates.io).
   parts.push(renderLicenses(det));
 
+  // Background items attributed to this app (behaviour watchdog).
+  parts.push(renderWatchdog(det));
+
   if (audit && !audit.error) {
     // The audit payload is platform-tagged (`platform`: macos | windows | linux).
     parts.push(...renderAudit(audit));
@@ -2066,6 +2069,196 @@ detailBody.addEventListener("click", (e) => {
     .finally(() => refreshLicenses(det));
 });
 
+// ---------- behaviour watchdog ----------------
+// Machine-wide: every launchd agent/daemon and browser native-messaging host,
+// attributed to an installed app (bundle, signing team, package manager, or
+// optionally Jev — an on-device model — for name-only matches), checked
+// against deterministic rules, and diffed with the previous scan. See
+// crates/jev/src/watchdog.
+
+const WD_VERDICT = {
+  normal: { label: "ok", css: "ok" },
+  questionable: { label: "review", css: "warn" },
+  bad: { label: "suspicious", css: "bad" },
+};
+const WD_KIND = {
+  userAgent: "Login agent",
+  globalAgent: "Login agent (all users)",
+  daemon: "Root daemon",
+  browserBridge: "Browser bridge",
+};
+const JEV_NOT_CACHED = "jev-model-not-cached";
+
+/** `jev_status`: { model, cached, loaded } (null until known / web build). */
+let jevModel = null;
+function refreshJevStatus() {
+  return invoke("jev_status")
+    .then((s) => {
+      jevModel = s;
+    })
+    .catch(() => {
+      jevModel = null;
+    });
+}
+
+// idle | running | needs-model | done | error
+const watchdog = { status: "idle", report: null, error: null, useModel: false };
+
+async function runWatchdog(allowDownload = false) {
+  watchdog.status = "running";
+  watchdog.error = null;
+  refreshWatchdogViews();
+  const apps = [...rows.values()].map(({ detection: d }) => ({
+    name: appName(d),
+    bundleId: d.bundle_id ?? null,
+    path: d.path,
+  }));
+  try {
+    watchdog.report = await invoke("watchdog_scan", { apps, useModel: watchdog.useModel, allowDownload });
+    watchdog.status = "done";
+    if (watchdog.useModel && jevModel) jevModel.cached = true;
+  } catch (err) {
+    const msg = String(err);
+    watchdog.status = msg.includes(JEV_NOT_CACHED) ? "needs-model" : "error";
+    watchdog.error = watchdog.status === "error" ? msg : null;
+  }
+  refreshWatchdogViews();
+}
+
+function refreshWatchdogViews() {
+  scheduleDashboard();
+  if (currentDetail) {
+    const el = document.querySelector("#wd-section");
+    if (el) el.innerHTML = renderWatchdogForApp(currentDetail);
+  }
+}
+
+function wdOwner(owner) {
+  switch (owner.by) {
+    case "bundle":
+      return `inside ${escapeHtml(owner.app)}`;
+    case "team":
+      return `signed by ${escapeHtml(owner.app)}'s developer`;
+    case "apple":
+      return "Apple";
+    case "packageManager":
+      return `installed by ${escapeHtml(owner.manager)}`;
+    case "model":
+      return `looks like ${escapeHtml(owner.app)} <span class="muted">(Jev, ${Math.round(owner.confidence * 100)}%)</span>`;
+    default:
+      return `<span class="warn">no owner found</span>`;
+  }
+}
+
+function wdItemRow(r, isNew) {
+  const v = WD_VERDICT[r.verdict] ?? WD_VERDICT.questionable;
+  const signals = r.signals
+    .filter((s) => s.severity !== "info" || r.verdict === "normal")
+    .map((s) => `<li class="${s.severity === "high" ? "bad" : s.severity === "medium" ? "warn" : "muted"}">${escapeHtml(s.text)}</li>`)
+    .join("");
+  return `<li class="wd-item">
+      <span class="risk ${v.css}">${v.label}</span>
+      <span class="dash-app-main">
+        <span class="dash-app-name"><code>${escapeHtml(r.item.label ?? r.item.program)}</code>
+          ${isNew ? `<span class="risk warn">new</span>` : ""}</span>
+        <span class="dash-app-meta muted">${WD_KIND[r.item.kind.type] ?? r.item.kind.type}${
+          r.item.kind.browser ? ` · ${escapeHtml(r.item.kind.browser)}` : ""
+        } · ${wdOwner(r.owner)}</span>
+        <span class="dash-app-meta muted"><code>${escapeHtml(r.item.program)}</code></span>
+        ${signals ? `<ul class="dash-why">${signals}</ul>` : ""}
+      </span>
+    </li>`;
+}
+
+function wdModelNote() {
+  const model = jevModel?.model ?? "the Jev model";
+  return `Optional: let Jev (<code>${escapeHtml(model)}</code>, ~1.1 GB, downloaded once) suggest an owner for items no signature ties to an app — it catches impersonators like a fake "Chrome updater". It only loads when an item needs it, runs on this device, and is unloaded afterwards.`;
+}
+
+function renderWatchdogCard() {
+  const r = watchdog.report;
+  let body;
+  if (watchdog.status === "running") {
+    body = `<p class="muted">Inventorying background items and checking signatures…</p>`;
+  } else if (watchdog.status === "needs-model") {
+    body = `<p class="muted">${wdModelNote()}</p>
+      <p><button type="button" data-dash-action="wd-download">Download model &amp; run</button>
+         <button type="button" data-dash-action="wd-no-model">Run without it</button></p>`;
+  } else if (r) {
+    const added = new Set(r.changes.filter((c) => c.kind === "added").map((c) => c.source));
+    const changed = r.changes.filter((c) => c.kind === "programChanged");
+    const removed = r.changes.filter((c) => c.kind === "removed");
+    const flagged = r.items
+      .filter((x) => x.verdict !== "normal")
+      .sort((a, b) => (a.verdict === "bad" ? -1 : 0) - (b.verdict === "bad" ? -1 : 0));
+    const counts = { normal: 0, questionable: 0, bad: 0 };
+    for (const x of r.items) counts[x.verdict]++;
+    const since = r.baselineAt
+      ? `Since the last scan (${escapeHtml(formatRelativeTime(new Date(r.baselineAt * 1000).toISOString()))}): ${
+          r.changes.length
+            ? `${added.size} new, ${changed.length} changed, ${removed.length} removed.`
+            : "nothing changed."
+        }`
+      : "First scan — later scans will show what changed.";
+    body = `
+      <p>${Object.entries(counts)
+        .map(([k, n]) => `<span class="risk ${WD_VERDICT[k].css}">${n} ${WD_VERDICT[k].label}</span>`)
+        .join(" ")} <span class="muted">of ${r.items.length} background item(s)</span></p>
+      <p class="muted">${since}</p>
+      ${
+        flagged.length
+          ? `<ul class="dash-attention">${flagged.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>`
+          : `<p class="ok">Nothing looks out of place.</p>`
+      }
+      ${
+        changed.length
+          ? `<p class="warn">Changed program: ${changed.map((c) => `<code>${escapeHtml(c.source)}</code>`).join(", ")}</p>`
+          : ""
+      }
+      <details class="binmeta-list"><summary class="muted">All ${r.items.length} background item(s)</summary>
+        <ul class="dash-attention">${r.items.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>
+      </details>
+      <p><button type="button" data-dash-action="wd-run">Scan again</button></p>`;
+  } else {
+    const err = watchdog.error ? `<p class="bad">${escapeHtml(watchdog.error)}</p>` : "";
+    body = `${err}<p class="muted">Lists everything on this machine that starts in the background or bridges into a browser, checks who signed it and which app it belongs to, and flags the patterns malware uses to stay put — scripts, hidden folders, Apple look-alike names, unsigned programs, orphans.</p>
+      <p><button type="button" data-dash-action="wd-run">Run watchdog</button></p>`;
+  }
+  const modelToggle =
+    watchdog.status === "running" || watchdog.status === "needs-model"
+      ? ""
+      : `<label class="muted wd-toggle"><input type="checkbox" data-dash-action="wd-toggle-model" ${
+          watchdog.useModel ? "checked" : ""
+        }/> Use Jev for ownership <span class="muted">(optional, on-device)</span></label>`;
+  return `<article class="dash-card dash-wide">
+      <h2>Behaviour watchdog <span class="muted">experimental</span></h2>
+      ${body}${modelToggle}
+    </article>`;
+}
+
+// Detail pane: the background items attributed to this app.
+function renderWatchdog(det) {
+  return `<h3>Background items <span class="muted">(watchdog)</span></h3><div id="wd-section">${renderWatchdogForApp(det)}</div>`;
+}
+
+function renderWatchdogForApp(det) {
+  const r = watchdog.report;
+  if (!r) {
+    return watchdog.status === "running"
+      ? `<p class="muted">scanning…</p>`
+      : `<p class="muted">Run the behaviour watchdog to see what this app keeps running in the background. <button type="button" data-wd="run">Run watchdog</button></p>`;
+  }
+  const name = appName(det);
+  const mine = r.items.filter((x) => x.owner.app === name);
+  if (!mine.length) return `<p class="muted">No background items or browser bridges belong to this app.</p>`;
+  const added = new Set(r.changes.filter((c) => c.kind === "added").map((c) => c.source));
+  return `<ul class="dash-attention">${mine.map((x) => wdItemRow(x, added.has(x.item.source))).join("")}</ul>`;
+}
+
+detailBody.addEventListener("click", (e) => {
+  if (e.target.closest("[data-wd]")) void runWatchdog();
+});
+
 detailBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-rustaudit]");
   if (!btn || !currentDetail) return;
@@ -2319,6 +2512,8 @@ function clearList() {
   // keeps showing its pre-rescan audit/CVE payload (e.g. an old runtime
   // version and the CVEs that went with it) after the app has been updated.
   detailCache.clear();
+  watchdog.report = null;
+  watchdog.status = "idle";
   tbody.replaceChildren();
   detailPanel.hidden = true;
   currentDetail = null;
@@ -2848,6 +3043,8 @@ function renderDashboard() {
         ${renderAttention(s)}
       </article>
 
+      ${renderWatchdogCard()}
+
       <article class="dash-card dash-wide">
         <h2>Framework mix</h2>
         ${renderFrameworks(s)}
@@ -3003,6 +3200,14 @@ dashboardPanel.addEventListener("click", (e) => {
   const action = e.target.closest("[data-dash-action]")?.dataset.dashAction;
   if (action === "os-update") void invoke("open_os_update").catch(() => {});
   else if (action === "cve-sweep") void runDashboardCveSweep();
+  else if (action === "wd-run") void runWatchdog(false);
+  else if (action === "wd-download") void runWatchdog(true);
+  else if (action === "wd-no-model") {
+    watchdog.useModel = false;
+    void runWatchdog(false);
+  } else if (action === "wd-toggle-model") {
+    watchdog.useModel = e.target.checked;
+  }
 });
 
 // ---------- auto-update (CrabNebula Cloud) ----------
@@ -3076,6 +3281,7 @@ buildHeader();
 startScan();
 void checkForUpdates();
 void refreshNvdKeyState();
+void refreshJevStatus().then(scheduleDashboard);
 
 // Custom window controls for the frameless title bar.
 const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();
