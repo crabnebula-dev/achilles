@@ -26,10 +26,12 @@
 //! # }
 //! ```
 
+pub mod watchdog;
+
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri_plugin_llm::backend::{create_backend_by_model_file, ModelBackend};
+use tauri_plugin_llm::backend::{create_backend_by_model_file, create_backend_by_model_index_file, ModelBackend};
 use tauri_plugin_llm::candle_core::{DType, Device, Tensor};
 use tauri_plugin_llm::tokenizers::Tokenizer;
 
@@ -40,6 +42,7 @@ pub const DEFAULT_MODEL: &str = "Qwen/Qwen3-0.6B";
 const CONFIG_FILE: &str = "config.json";
 const TOKENIZER_FILE: &str = "tokenizer.json";
 const WEIGHTS_FILE: &str = "model.safetensors";
+const WEIGHTS_INDEX_FILE: &str = "model.safetensors.index.json";
 
 /// Option labels, in order. One letter per choice.
 const LABELS: [&str; 26] = [
@@ -61,13 +64,24 @@ pub enum JevError {
     Tokenizer(String),
     #[error("need between 2 and {max} choices, got {0}", max = LABELS.len())]
     ChoiceCount(usize),
+    #[error("weights index: {0}")]
+    Index(String),
     #[error("label {0:?} is not a single token for this tokenizer")]
     LabelToken(String),
 }
 
 pub type Result<T> = std::result::Result<T, JevError>;
 
-/// Local paths to the three files a Qwen3 safetensors model needs.
+/// Where a model's safetensors weights live.
+#[derive(Debug, Clone)]
+pub enum Weights {
+    /// One `model.safetensors` (small models such as Qwen3-0.6B).
+    Single(PathBuf),
+    /// `model.safetensors.index.json` plus the shards it names, all in `dir`.
+    Sharded { index: PathBuf, dir: PathBuf },
+}
+
+/// Local paths to the files a Qwen3 safetensors model needs.
 #[derive(Debug, Clone)]
 pub struct ModelFiles {
     /// Hugging Face repo id, e.g. `Qwen/Qwen3-0.6B`. The plugin picks its
@@ -75,7 +89,7 @@ pub struct ModelFiles {
     pub model_id: String,
     pub config: PathBuf,
     pub tokenizer: PathBuf,
-    pub weights: PathBuf,
+    pub weights: Weights,
 }
 
 impl ModelFiles {
@@ -93,11 +107,17 @@ impl ModelFiles {
 
     /// Use model files from a plain directory (e.g. one shipped next to the app).
     pub fn from_dir(model_id: &str, dir: &Path) -> Self {
+        let index = dir.join(WEIGHTS_INDEX_FILE);
+        let weights = if index.exists() {
+            Weights::Sharded { index, dir: dir.to_path_buf() }
+        } else {
+            Weights::Single(dir.join(WEIGHTS_FILE))
+        };
         Self {
             model_id: model_id.to_string(),
             config: dir.join(CONFIG_FILE),
             tokenizer: dir.join(TOKENIZER_FILE),
-            weights: dir.join(WEIGHTS_FILE),
+            weights,
         }
     }
 
@@ -115,13 +135,42 @@ impl ModelFiles {
                     e => JevError::Hub(e),
                 })
         };
+        // Larger models ship sharded: prefer the index when the repo has one.
+        let weights = match get(WEIGHTS_INDEX_FILE) {
+            Ok(index) => {
+                for shard in shard_files(&index)? {
+                    get(&shard)?;
+                }
+                let dir = index.parent().map(Path::to_path_buf).unwrap_or_default();
+                Weights::Sharded { index, dir }
+            }
+            Err(JevError::Hub(hf_hub::HFError::EntryNotFound { .. })) | Err(JevError::NotCached(_)) => {
+                Weights::Single(get(WEIGHTS_FILE)?)
+            }
+            Err(e) => return Err(e),
+        };
         Ok(Self {
             model_id: model_id.to_string(),
             config: get(CONFIG_FILE)?,
             tokenizer: get(TOKENIZER_FILE)?,
-            weights: get(WEIGHTS_FILE)?,
+            weights,
         })
     }
+}
+
+/// Distinct shard file names listed in a safetensors index.
+fn shard_files(index: &Path) -> Result<Vec<String>> {
+    let text = std::fs::read_to_string(index).map_err(|e| JevError::Index(e.to_string()))?;
+    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| JevError::Index(e.to_string()))?;
+    let mut files: Vec<String> = json["weight_map"]
+        .as_object()
+        .ok_or_else(|| JevError::Index("no weight_map".into()))?
+        .values()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
 }
 
 /// One choice's score.
@@ -164,6 +213,9 @@ pub struct Jev {
     backend: Box<dyn ModelBackend>,
     tokenizer: Tokenizer,
     device: Device,
+    /// Hybrid-thinking Qwen3 models need an empty `<think>` block before the
+    /// answer; the non-thinking Instruct-2507 releases don't use one.
+    empty_think: bool,
 }
 
 impl Jev {
@@ -173,12 +225,18 @@ impl Jev {
     }
 
     pub fn load_on(files: &ModelFiles, device: Device) -> Result<Self> {
-        let backend = create_backend_by_model_file(&files.model_id, &device, &files.weights, &files.config)?;
+        let backend = match &files.weights {
+            Weights::Single(file) => create_backend_by_model_file(&files.model_id, &device, file, &files.config)?,
+            Weights::Sharded { index, dir } => {
+                create_backend_by_model_index_file(&files.model_id, &device, index, dir, &files.config)?
+            }
+        };
         let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| JevError::Tokenizer(e.to_string()))?;
         Ok(Self {
             backend,
             tokenizer,
             device,
+            empty_think: !files.model_id.contains("Instruct-2507"),
         })
     }
 
@@ -196,7 +254,7 @@ impl Jev {
             .map(|l| self.single_token(l))
             .collect::<Result<Vec<_>>>()?;
 
-        let prompt = build_prompt(system, subject, labels, choices);
+        let prompt = build_prompt(system, subject, labels, choices, self.empty_think);
         // Special tokens (`<|im_start|>` …) are matched from the text itself;
         // Qwen has no BOS, so don't let the tokenizer add one.
         let ids = self
@@ -244,17 +302,18 @@ impl Jev {
     }
 }
 
-/// The Qwen3 chat prompt, with an empty `<think>` block so the very next token
-/// is the answer letter.
-pub fn build_prompt(system: &str, subject: &str, labels: &[&str], choices: &[&str]) -> String {
+/// The Qwen3 chat prompt. With `empty_think`, an empty `<think>` block skips
+/// the reasoning phase so the very next token is the answer letter.
+pub fn build_prompt(system: &str, subject: &str, labels: &[&str], choices: &[&str], empty_think: bool) -> String {
     let options = labels
         .iter()
         .zip(choices)
         .map(|(label, choice)| format!("{label}. {choice}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let think = if empty_think { "<think>\n\n</think>\n\n" } else { "" };
     format!(
-        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{subject}\n\n{options}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{subject}\n\n{options}<|im_end|>\n<|im_start|>assistant\n{think}"
     )
 }
 
@@ -286,6 +345,7 @@ mod tests {
             "Email: Payroll asks for your password on a non-company sign-in page.",
             &["A", "B", "C"],
             &["Legitimate", "Spam", "Phishing"],
+            true,
         );
         assert_eq!(got, expected);
     }

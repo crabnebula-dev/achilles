@@ -1229,6 +1229,9 @@ function renderDetail(det, audit, cves, staticScan, depAdvisories, savedAtIso, s
   // Open-source license composition (on-demand; Rust crates hit crates.io).
   parts.push(renderLicenses(det));
 
+  // On-device behaviour assessment (Jev; on demand, experimental).
+  parts.push(renderJev(det));
+
   if (audit && !audit.error) {
     // The audit payload is platform-tagged (`platform`: macos | windows | linux).
     parts.push(...renderAudit(audit));
@@ -2066,6 +2069,211 @@ detailBody.addEventListener("click", (e) => {
     .finally(() => refreshLicenses(det));
 });
 
+// ---------- behaviour watchdog (Jev) — LOCAL ONLY until November ---------
+// Asks an on-device language model (see crates/jev) whether an app's observed
+// behaviour — persistence, browser bridges, signing, entitlements, network
+// destinations — is expected for an app of its kind. An experimental opinion:
+// it is shown next to, never folded into, the risk rating.
+
+const JEV_VERDICT = {
+  normal: { label: "expected", css: "ok" },
+  questionable: { label: "unusual", css: "warn" },
+  bad: { label: "looks abusive", css: "bad" },
+};
+const JEV_NOT_CACHED = "jev-model-not-cached";
+
+/** `jev_status` result: { model, cached, loaded } (null until known / web build). */
+let jevModel = null;
+function refreshJevStatus() {
+  return invoke("jev_status")
+    .then((s) => {
+      jevModel = s;
+    })
+    .catch(() => {
+      jevModel = null;
+    });
+}
+
+const jevState = new Map();
+function jevFor(path) {
+  if (!jevState.has(path)) {
+    // idle | running | needs-model | done
+    jevState.set(path, { status: "idle", result: null, error: null });
+  }
+  return jevState.get(path);
+}
+
+// Hosts seen in this session's network capture for the app, if any.
+function jevDestinations(det) {
+  const st = cryptoState.get(det.path);
+  if (!st?.dests?.size) return null;
+  return [...st.dests.values()].map((d) => `${d.hostname || d.sni || d.remoteIp}:${d.port}`);
+}
+
+async function runJev(det, allowDownload) {
+  const st = jevFor(det.path);
+  st.status = "running";
+  st.error = null;
+  refreshJev(det);
+  try {
+    st.result = await invoke("jev_assess", {
+      path: det.path,
+      root: det.root,
+      bundleId: det.bundle_id ?? null,
+      executable: det.executable ?? null,
+      name: appName(det),
+      framework: det.framework ?? null,
+      destinations: jevDestinations(det),
+      allowDownload,
+    });
+    st.status = "done";
+    if (jevModel) jevModel.cached = jevModel.loaded = true;
+  } catch (err) {
+    const msg = String(err);
+    st.status = msg.includes(JEV_NOT_CACHED) ? "needs-model" : "idle";
+    st.error = st.status === "idle" ? msg : null;
+  }
+  refreshJev(det);
+  return st;
+}
+
+function jevDownloadNote() {
+  const model = jevModel?.model ?? "the Jev model";
+  return `Jev needs <code>${escapeHtml(model)}</code> (~7.5 GB, downloaded once from Hugging Face). After that everything runs on this device — nothing about your apps leaves it.`;
+}
+
+function renderJev(det) {
+  return `<h3>Behaviour <span class="muted">(Jev, experimental)</span></h3><div id="jev-section">${renderJevInner(jevFor(det.path))}</div>`;
+}
+
+function renderJevInner(st) {
+  if (st.status === "running") {
+    return `<p class="muted">assessing… ${
+      jevModel?.loaded ? "" : "(the first run loads the model, ~15 s)"
+    }</p>`;
+  }
+  if (st.status === "needs-model") {
+    return `<p class="muted">${jevDownloadNote()}</p><p><button type="button" data-jev="download">Download model &amp; assess</button></p>`;
+  }
+  if (st.status === "done" && st.result) return renderJevResult(st.result);
+  const err = st.error ? `<p class="bad">${escapeHtml(st.error)}</p>` : "";
+  return `${err}<p class="muted">Ask an on-device language model whether this app's behaviour — what it installs, the rights it holds, who it talks to — is expected for an app of its kind. <button type="button" data-jev="run">Assess behaviour</button></p>`;
+}
+
+function renderJevResult(r) {
+  const v = JEV_VERDICT[r.verdict] ?? JEV_VERDICT.questionable;
+  const [pn, pq, pb] = r.probabilities;
+  const pct = (p) => `${Math.round(p * 100)}%`;
+  const facts = r.facts.length
+    ? `<ul class="jev-facts">${r.facts.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>${
+        r.factsDropped ? `<p class="muted">(+${r.factsDropped} more not shown to the model)</p>` : ""
+      }`
+    : `<p class="muted">Nothing unusual was observed.</p>`;
+  return `
+    <p><span class="risk ${v.css}">${v.label}</span>
+      <span class="muted">expected ${pct(pn)} · unusual ${pct(pq)} · abusive ${pct(pb)}</span></p>
+    <div class="dash-bar jev-bar" role="img" aria-label="expected ${pct(pn)}, unusual ${pct(pq)}, abusive ${pct(pb)}">
+      <span class="dash-bar-seg ok" style="flex-grow:${pn}"></span>
+      <span class="dash-bar-seg warn" style="flex-grow:${pq}"></span>
+      <span class="dash-bar-seg bad" style="flex-grow:${pb}"></span>
+    </div>
+    <details class="binmeta-list"><summary class="muted">What the model saw (${r.facts.length})</summary>${facts}</details>
+    <p class="muted">A language model's opinion, not a verdict — it doesn't change the risk rating.
+      <button type="button" data-jev="run">Re-assess</button></p>`;
+}
+
+function refreshJev(det) {
+  scheduleDashboard();
+  if (currentDetail?.path !== det.path) return;
+  const el = document.querySelector("#jev-section");
+  if (el) el.innerHTML = renderJevInner(jevFor(det.path));
+}
+
+detailBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-jev]");
+  if (!btn || !currentDetail) return;
+  void runJev(currentDetail, btn.dataset.jev === "download");
+});
+
+// Dashboard sweep: assess every app that hasn't been, one at a time (the
+// model is single-threaded; ~3.5 s per app on Apple silicon).
+let jevSweep = null;
+async function runJevSweep(allowDownload) {
+  if (jevSweep) return;
+  const targets = [...rows.values()]
+    .map((r) => r.detection)
+    .filter((d) => jevFor(d.path).status !== "done");
+  jevSweep = { done: 0, total: targets.length, current: null };
+  scheduleDashboard();
+  for (const det of targets) {
+    if (!rows.has(det.path)) continue; // cleared by a rescan mid-sweep
+    jevSweep.current = appName(det);
+    scheduleDashboard();
+    const st = await runJev(det, allowDownload);
+    if (st.status === "needs-model") break; // ask once, not per app
+    allowDownload = false; // downloaded (or failed) on the first app
+    jevSweep.done++;
+  }
+  jevSweep = null;
+  scheduleDashboard();
+}
+
+function renderJevCard() {
+  const assessed = [];
+  for (const { detection: det } of rows.values()) {
+    const st = jevState.get(det.path);
+    if (st?.status === "done" && st.result) assessed.push({ det, r: st.result });
+  }
+  const needsModel = [...jevState.values()].some((s) => s.status === "needs-model") || jevModel?.cached === false;
+  const counts = { normal: 0, questionable: 0, bad: 0 };
+  for (const { r } of assessed) counts[r.verdict]++;
+  const flagged = assessed
+    .filter(({ r }) => r.verdict !== "normal")
+    .sort((a, b) => b.r.probabilities[2] - a.r.probabilities[2] || b.r.probabilities[1] - a.r.probabilities[1]);
+
+  let controls;
+  if (jevSweep) {
+    controls = `<p class="muted">Assessing ${jevSweep.done}/${jevSweep.total}${
+      jevSweep.current ? ` — ${escapeHtml(jevSweep.current)}` : ""
+    }</p>`;
+  } else if (needsModel) {
+    controls = `<p class="muted">${jevDownloadNote()}</p><p><button type="button" data-dash-action="jev-download">Download model &amp; assess all apps</button></p>`;
+  } else {
+    const remaining = rows.size - assessed.length;
+    controls = remaining
+      ? `<p><button type="button" data-dash-action="jev-sweep">Assess ${assessed.length ? `remaining ${remaining}` : `all ${remaining}`} app(s)</button>
+          <span class="muted">~${Math.max(1, Math.round((remaining * 3.5) / 60))} min, runs on this device</span></p>`
+      : "";
+  }
+  const summary = assessed.length
+    ? `<p>${Object.entries(counts)
+        .map(([k, n]) => `<span class="risk ${JEV_VERDICT[k].css}">${n} ${JEV_VERDICT[k].label}</span>`)
+        .join(" ")} <span class="muted">of ${assessed.length} assessed</span></p>`
+    : `<p class="muted">An on-device language model judges whether each app's behaviour — what it installs, the rights it holds, who it talks to — is expected for an app of its kind. Experimental, and kept separate from the risk rating.</p>`;
+  const list = flagged.length
+    ? `<ul class="dash-attention">${flagged
+        .map(({ det, r }) => {
+          const v = JEV_VERDICT[r.verdict];
+          return `<li><button type="button" class="dash-app" data-dash-open="${escapeHtml(det.path)}" title="Open this app">
+            <span class="risk ${v.css}">${v.label}</span>
+            <span class="dash-app-main">
+              <span class="dash-app-name">${escapeHtml(appName(det))}</span>
+              <ul class="dash-why">${r.facts
+                .slice(0, 3)
+                .map((f) => `<li class="muted">${escapeHtml(f)}</li>`)
+                .join("")}</ul>
+            </span></button></li>`;
+        })
+        .join("")}</ul>`
+    : assessed.length
+      ? `<p class="muted">Nothing flagged so far.</p>`
+      : "";
+  return `<article class="dash-card dash-wide">
+      <h2>Behaviour watchdog <span class="muted">Jev · experimental</span></h2>
+      ${summary}${controls}${list}
+    </article>`;
+}
+
 detailBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-rustaudit]");
   if (!btn || !currentDetail) return;
@@ -2319,6 +2527,7 @@ function clearList() {
   // keeps showing its pre-rescan audit/CVE payload (e.g. an old runtime
   // version and the CVEs that went with it) after the app has been updated.
   detailCache.clear();
+  jevState.clear();
   tbody.replaceChildren();
   detailPanel.hidden = true;
   currentDetail = null;
@@ -2848,6 +3057,8 @@ function renderDashboard() {
         ${renderAttention(s)}
       </article>
 
+      ${renderJevCard()}
+
       <article class="dash-card dash-wide">
         <h2>Framework mix</h2>
         ${renderFrameworks(s)}
@@ -3003,6 +3214,8 @@ dashboardPanel.addEventListener("click", (e) => {
   const action = e.target.closest("[data-dash-action]")?.dataset.dashAction;
   if (action === "os-update") void invoke("open_os_update").catch(() => {});
   else if (action === "cve-sweep") void runDashboardCveSweep();
+  else if (action === "jev-sweep") void runJevSweep(false);
+  else if (action === "jev-download") void runJevSweep(true);
 });
 
 // ---------- auto-update (CrabNebula Cloud) ----------
@@ -3076,6 +3289,7 @@ buildHeader();
 startScan();
 void checkForUpdates();
 void refreshNvdKeyState();
+void refreshJevStatus().then(scheduleDashboard);
 
 // Custom window controls for the frameless title bar.
 const appWindow = window.__TAURI__?.window?.getCurrentWindow?.();

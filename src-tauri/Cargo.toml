@@ -41,6 +41,7 @@ cbom.workspace = true
 rust-audit.workspace = true
 binmeta.workspace = true
 licenses.workspace = true
+jev.workspace = true
 sysinfo.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

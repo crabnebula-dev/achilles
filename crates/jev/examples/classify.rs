@@ -19,7 +19,8 @@ fn main() -> Result<(), jev::JevError> {
     let choices: Vec<&str> = choices.iter().map(String::as_str).collect();
 
     let t = Instant::now();
-    let files = jev::ModelFiles::fetch(jev::DEFAULT_MODEL)?;
+    let model = std::env::var("JEV_MODEL").unwrap_or_else(|_| jev::DEFAULT_MODEL.to_string());
+    let files = jev::ModelFiles::fetch(&model)?;
     let mut jev = jev::Jev::load(&files)?;
     eprintln!("loaded {} in {:.2?}", files.model_id, t.elapsed());
 

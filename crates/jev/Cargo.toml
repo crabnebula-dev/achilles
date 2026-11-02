@@ -11,4 +11,5 @@ publish = false
 tauri-plugin-llm = { path = "../../../tauri-plugin-llm" }
 hf-hub = { version = "1", features = ["blocking"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }

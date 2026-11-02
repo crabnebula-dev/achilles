@@ -104,3 +104,5 @@ rust-audit = { path = "crates/rust-audit" }
 binmeta = { path = "crates/binmeta" }
 pkg = { path = "crates/pkg" }
 licenses = { path = "crates/licenses" }
+# LOCAL ONLY until November — see crates/jev.
+jev = { path = "crates/jev" }

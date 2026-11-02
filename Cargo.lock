@@ -12,6 +12,7 @@ dependencies = [
  "cve",
  "detect",
  "dirs 6.0.0",
+ "jev",
  "licenses",
  "netmon",
  "objc2",
@@ -3042,6 +3043,7 @@ version = "0.1.0"
 dependencies = [
  "hf-hub",
  "serde",
+ "serde_json",
  "tauri-plugin-llm",
  "thiserror 2.0.18",
 ]

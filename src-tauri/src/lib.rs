@@ -14,6 +14,7 @@ mod crypto_store;
 mod helper_mac;
 mod journal;
 mod reporting;
+mod watchdog;
 
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -344,6 +345,8 @@ pub fn run() {
             commands::binary_headers,
             commands::library_cves,
             commands::license_scan,
+            watchdog::jev_status,
+            watchdog::jev_assess,
             commands::rust_audit,
             commands::os_info,
             commands::open_os_update,

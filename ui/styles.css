@@ -1093,3 +1093,8 @@ main[data-view="dashboard"] > #detail-panel {
     padding-bottom: 10px;
   }
 }
+
+/* Behaviour watchdog (Jev) */
+.jev-bar { margin: var(--space-2) 0; }
+.jev-facts { margin: var(--space-2) 0 0; padding-left: 1.2em; }
+.jev-facts li { margin: 2px 0; }
