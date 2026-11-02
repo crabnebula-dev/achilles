@@ -1,19 +1,22 @@
 //! Behaviour watchdog (LOCAL ONLY until November): turns the evidence Achilles
 //! already gathers about an app — persistence, browser bridges, signing,
-//! entitlements, network destinations — into plain-language facts and asks
-//! Jev (an on-device Qwen3-4B classifier, see [`jev::watchdog::MODEL`]) whether the app is behaving badly.
+//! entitlements, network destinations — into plain-language facts grouped by
+//! aspect, and asks Jev (an on-device quantized Qwen3, see
+//! [`jev::watchdog::MODEL`]) one narrow criterion per aspect.
 //!
-//! The model is loaded lazily on first use and kept for the process lifetime.
-//! It is only ever downloaded when the UI passes `allow_download` (the user
-//! clicked through a size warning); otherwise a missing model is reported as
-//! [`MODEL_NOT_CACHED`] so the UI can ask.
+//! The model is loaded on demand and dropped again after [`IDLE_UNLOAD`]
+//! without work, so it only occupies memory while assessing. It is only ever
+//! downloaded when the UI passes `allow_download` (the user clicked through a
+//! size note); otherwise a missing model is reported as [`MODEL_NOT_CACHED`]
+//! so the UI can ask.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use app_audit::{AppAudit, MacosAudit};
-use jev::watchdog::{self, Assessment, Subject};
-use jev::watchdog::MODEL;
+use jev::watchdog::{self, Assessment, Evidence, MODEL};
 use jev::{Jev, JevError, ModelFiles};
 use serde::Serialize;
 use sideeffects::{LaunchScope, SideEffects};
@@ -21,8 +24,14 @@ use sideeffects::{LaunchScope, SideEffects};
 /// Error string the UI matches to offer the model download.
 pub const MODEL_NOT_CACHED: &str = "jev-model-not-cached";
 
-/// Loaded once, reused across assessments (loading takes seconds).
+/// Drop the model after this long without an assessment. Long enough that a
+/// dashboard sweep never reloads between apps.
+pub const IDLE_UNLOAD: Duration = Duration::from_secs(30);
+
+/// Loaded on demand; `None` while idle.
 static ENGINE: Mutex<Option<Jev>> = Mutex::new(None);
+/// Bumped by every assessment; an unload timer only fires if it's unchanged.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,19 +44,19 @@ pub struct JevStatus {
 #[tauri::command]
 pub async fn jev_status() -> JevStatus {
     tokio::task::spawn_blocking(|| JevStatus {
-        model: MODEL,
-        cached: ModelFiles::cached(MODEL).is_ok(),
+        model: MODEL.id(),
+        cached: ModelFiles::cached(&MODEL).is_ok(),
         loaded: ENGINE.lock().map(|e| e.is_some()).unwrap_or(false),
     })
     .await
     .unwrap_or(JevStatus {
-        model: MODEL,
+        model: MODEL.id(),
         cached: false,
         loaded: false,
     })
 }
 
-/// Gather evidence for one app and ask Jev for a verdict. `destinations` are
+/// Gather evidence for one app and ask Jev about it. `destinations` are
 /// `host:port` labels from a network capture the UI already holds, if any.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -61,22 +70,20 @@ pub async fn jev_assess(
     destinations: Option<Vec<String>>,
     allow_download: bool,
 ) -> Result<Assessment, String> {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
     let audit = app_audit::audit(&path, &root, executable.as_deref()).await.ok();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let side = sideeffects::analyse(&path, bundle_id.as_deref(), executable.as_deref()).ok();
-        let facts = collect_facts(&path, audit.as_ref(), side.as_ref(), destinations.as_deref().unwrap_or(&[]));
-        let subject = Subject {
-            name: &name,
-            framework: framework.as_deref().filter(|f| *f != "unknown"),
-            facts,
-        };
+        let mut evidence = collect_evidence(&path, audit.as_ref(), side.as_ref(), destinations.as_deref().unwrap_or(&[]));
+        evidence.application = name;
+        evidence.framework = framework.filter(|f| f != "unknown");
 
         let mut engine = ENGINE.lock().map_err(|_| "jev engine poisoned".to_string())?;
         if engine.is_none() {
             let files = if allow_download {
-                ModelFiles::fetch(MODEL)
+                ModelFiles::fetch(&MODEL)
             } else {
-                ModelFiles::cached(MODEL)
+                ModelFiles::cached(&MODEL)
             }
             .map_err(|e| match e {
                 JevError::NotCached(_) => MODEL_NOT_CACHED.to_string(),
@@ -85,40 +92,38 @@ pub async fn jev_assess(
             *engine = Some(Jev::load(&files).map_err(|e| e.to_string())?);
         }
         let jev = engine.as_mut().expect("engine loaded above");
-        watchdog::assess(jev, &subject).map_err(|e| e.to_string())
+        watchdog::assess(jev, &evidence).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    schedule_unload();
+    result
 }
 
-/// Every fact, most significant first (the prompt truncates from the end).
-pub fn collect_facts(
+fn schedule_unload() {
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(IDLE_UNLOAD).await;
+        if GENERATION.load(Ordering::SeqCst) == generation {
+            // try_lock: an assessment in flight means we're not idle after all.
+            if let Ok(mut engine) = ENGINE.try_lock() {
+                *engine = None;
+            }
+        }
+    });
+}
+
+/// Group every observation by aspect, most significant first within each.
+pub fn collect_evidence(
     app_path: &Path,
     audit: Option<&AppAudit>,
     side: Option<&SideEffects>,
     destinations: &[String],
-) -> Vec<String> {
-    let mut facts = Vec::new();
+) -> Evidence {
+    let mut e = Evidence::default();
     if let Some(side) = side {
-        facts.extend(launch_facts(app_path, side));
-    }
-    if let Some(AppAudit::Macos(m)) = audit {
-        facts.extend(macos_hardening_facts(m));
-    }
-    if let Some(side) = side {
-        facts.extend(browser_bridge_facts(side));
-    }
-    if let Some(AppAudit::Macos(m)) = audit {
-        facts.extend(macos_capability_facts(m));
-    }
-    if !destinations.is_empty() {
-        facts.push(format!(
-            "During a recorded session it contacted {} network destination(s): {}.",
-            destinations.len(),
-            list_some(destinations, 12)
-        ));
-    }
-    if let Some(side) = side {
+        e.background_activity = launch_facts(app_path, side);
+        e.browser_integration = browser_bridge_facts(side);
         let helpers: Vec<String> = side
             .helpers
             .iter()
@@ -127,14 +132,19 @@ pub fn collect_facts(
             .map(|h| h.name.clone())
             .collect();
         if !helpers.is_empty() {
-            facts.push(format!(
+            e.components.push(format!(
                 "Ships {} helper executable(s) or plug-in(s): {}.",
                 helpers.len(),
-                list_some(&helpers, 4)
+                list_some(&helpers, 6)
             ));
         }
     }
-    facts
+    if let Some(AppAudit::Macos(m)) = audit {
+        e.code_integrity = macos_hardening_facts(m);
+        e.privacy_access = macos_capability_facts(m);
+    }
+    e.network_destinations = destinations.iter().map(|d| format!("Contacted {d}.")).collect();
+    e
 }
 
 fn launch_facts(app_path: &Path, side: &SideEffects) -> Vec<String> {
@@ -310,20 +320,17 @@ mod tests {
         }
     }
 
-    /// Calibration run over real installed apps (needs the model cached):
+    /// Calibration over the apps in /Applications, per candidate model
+    /// (downloads what's missing):
     /// `cargo test -p achilles --release watchdog::tests::calibrate -- --ignored --nocapture`
-    /// Prints one column per candidate prompt: N(ormal) / q(uestionable) / B(ad)
-    /// and P(bad).
+    /// `JEV_MODELS=0` limits it to `watchdog::MODELS[0]`, etc.
     #[test]
     #[ignore]
     fn calibrate() {
-        // Candidate 0 is what ships; add alternatives here to compare.
-        let candidates: Vec<(&str, [&str; 3])> = vec![(watchdog::SYSTEM, watchdog::CHOICES)];
+        let pick: Vec<usize> = std::env::var("JEV_MODELS")
+            .map(|v| v.split(',').filter_map(|i| i.trim().parse().ok()).collect())
+            .unwrap_or_else(|_| (0..watchdog::MODELS.len()).collect());
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let model = std::env::var("JEV_MODEL").unwrap_or_else(|_| MODEL.to_string());
-        let files = ModelFiles::cached(&model).expect("model cached");
-        let mut jev = Jev::load(&files).unwrap();
-        println!("model: {model}");
         let mut apps: Vec<PathBuf> = std::fs::read_dir("/Applications")
             .unwrap()
             .flatten()
@@ -331,35 +338,49 @@ mod tests {
             .filter(|p| p.extension().is_some_and(|x| x == "app"))
             .collect();
         apps.sort();
-        let subjects: Vec<(String, Vec<String>)> = apps
+        let evidence: Vec<Evidence> = apps
             .iter()
             .map(|app| {
                 let audit = rt.block_on(app_audit::audit(app, app, None)).ok();
                 let side = sideeffects::analyse(app, None, None).ok();
-                (file_name(app), collect_facts(app, audit.as_ref(), side.as_ref(), &[]))
+                let mut e = collect_evidence(app, audit.as_ref(), side.as_ref(), &[]);
+                e.application = file_name(app).trim_end_matches(".app").to_string();
+                e
             })
             .collect();
-        let mut tally = vec![[0usize; 3]; candidates.len()];
-        for (name, facts) in &subjects {
-            let mut line = format!("{name:<32} {:>2}f ", facts.len());
-            for (ci, (system, choices)) in candidates.iter().enumerate() {
-                let subject = Subject { name, framework: None, facts: facts.clone() };
-                let a = watchdog::assess_with(&mut jev, system, choices, &subject).unwrap();
-                let v = a.verdict as usize;
-                tally[ci][v] += 1;
-                line.push_str(&format!(" | {} {:.2}", ["N", "q", "B"][v], a.probabilities[2]));
+        for i in pick {
+            let source = watchdog::MODELS[i];
+            let files = ModelFiles::fetch(&source).expect("model");
+            let t = std::time::Instant::now();
+            let mut jev = Jev::load(&files).unwrap();
+            println!("\n== {} (loaded in {:.1?})", source.id(), t.elapsed());
+            let mut tally = [0usize; 3];
+            let t = std::time::Instant::now();
+            for e in &evidence {
+                let a = watchdog::assess(&mut jev, e).unwrap();
+                tally[a.verdict as usize] += 1;
+                let flags: Vec<String> = a
+                    .findings
+                    .iter()
+                    .map(|f| format!("{}{:?} {:.2}", if f.flagged { "!" } else { " " }, f.aspect, f.concern))
+                    .collect();
+                println!("{:<30} {:>12?}  {}", e.application, a.verdict, flags.join("  "));
             }
-            println!("{line}");
-        }
-        for (ci, t) in tally.iter().enumerate() {
-            println!("candidate {ci}: normal {} questionable {} bad {}", t[0], t[1], t[2]);
+            println!(
+                "normal {} questionable {} bad {}  ({:.1?} per app)",
+                tally[0],
+                tally[1],
+                tally[2],
+                t.elapsed() / evidence.len().max(1) as u32
+            );
         }
     }
 
     #[test]
-    fn nothing_observed_yields_no_facts() {
+    fn nothing_observed_yields_empty_evidence() {
         let app = Path::new("/Applications/Calc.app");
-        assert!(collect_facts(app, None, Some(&empty_side(app)), &[]).is_empty());
+        let e = collect_evidence(app, None, Some(&empty_side(app)), &[]);
+        assert!(e.background_activity.is_empty() && e.browser_integration.is_empty() && e.components.is_empty());
     }
 
     #[test]
@@ -375,9 +396,9 @@ mod tests {
             keep_alive: true,
             modified_at: None,
         });
-        let facts = collect_facts(app, None, Some(&side), &[]);
+        let e = collect_evidence(app, None, Some(&side), &[]);
         assert_eq!(
-            facts,
+            e.background_activity,
             ["Registers a launch daemon that runs as root at boot running com.foo.updater (located outside the app, at /Library/PrivilegedHelperTools/com.foo.updater), started automatically, relaunched whenever it exits."]
         );
     }
@@ -395,12 +416,12 @@ mod tests {
             keep_alive: false,
             modified_at: None,
         });
-        let facts = collect_facts(app, None, Some(&side), &[]);
-        assert_eq!(facts, ["Registers a launch agent for the current user running Foo Helper."]);
+        let e = collect_evidence(app, None, Some(&side), &[]);
+        assert_eq!(e.background_activity, ["Registers a launch agent for the current user running Foo Helper."]);
     }
 
     #[test]
-    fn bridges_and_destinations() {
+    fn bridges_and_destinations_land_in_their_aspects() {
         let app = Path::new("/Applications/Foo.app");
         let mut side = empty_side(app);
         side.native_messaging_hosts.push(NativeMessagingHost {
@@ -412,11 +433,9 @@ mod tests {
             created_at: None,
             modified_at: None,
         });
-        let dests: Vec<String> = (0..14).map(|i| format!("h{i}.example:443")).collect();
-        let facts = collect_facts(app, None, Some(&side), &dests);
-        assert_eq!(facts.len(), 2);
-        assert!(facts[0].contains("\"com.foo.bridge\" into Google Chrome"));
-        assert!(facts[1].starts_with("During a recorded session it contacted 14 network destination(s): h0.example:443"));
-        assert!(facts[1].ends_with("(+2 more)."));
+        let e = collect_evidence(app, None, Some(&side), &["api.foo.com:443".into()]);
+        assert_eq!(e.browser_integration.len(), 1);
+        assert!(e.browser_integration[0].contains("\"com.foo.bridge\" into Google Chrome"));
+        assert_eq!(e.network_destinations, ["Contacted api.foo.com:443."]);
     }
 }

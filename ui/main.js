@@ -2139,7 +2139,7 @@ async function runJev(det, allowDownload) {
 
 function jevDownloadNote() {
   const model = jevModel?.model ?? "the Jev model";
-  return `Jev needs <code>${escapeHtml(model)}</code> (~7.5 GB, downloaded once from Hugging Face). After that everything runs on this device — nothing about your apps leaves it.`;
+  return `Jev needs <code>${escapeHtml(model)}</code> (a ~2.5 GB download from Hugging Face, once). After that everything runs on this device — nothing about your apps leaves it — and the model only occupies memory while it's assessing.`;
 }
 
 function renderJev(det) {
@@ -2149,7 +2149,7 @@ function renderJev(det) {
 function renderJevInner(st) {
   if (st.status === "running") {
     return `<p class="muted">assessing… ${
-      jevModel?.loaded ? "" : "(the first run loads the model, ~15 s)"
+      jevModel?.loaded ? "" : "(loading the model first)"
     }</p>`;
   }
   if (st.status === "needs-model") {
@@ -2160,24 +2160,46 @@ function renderJevInner(st) {
   return `${err}<p class="muted">Ask an on-device language model whether this app's behaviour — what it installs, the rights it holds, who it talks to — is expected for an app of its kind. <button type="button" data-jev="run">Assess behaviour</button></p>`;
 }
 
+const JEV_ASPECT = {
+  backgroundActivity: "Background activity",
+  codeIntegrity: "Code integrity",
+  browserIntegration: "Browser integration",
+  privacyAccess: "Privacy & system access",
+  networkDestinations: "Network destinations",
+};
+
+// A finding's answer: the most probable of concern / fine / insufficient.
+function jevAnswer(f) {
+  if (f.flagged) return { label: "concern", css: "warn" };
+  return f.insufficient > f.fine ? { label: "unclear", css: "unknown" } : { label: "fits purpose", css: "ok" };
+}
+
 function renderJevResult(r) {
   const v = JEV_VERDICT[r.verdict] ?? JEV_VERDICT.questionable;
-  const [pn, pq, pb] = r.probabilities;
   const pct = (p) => `${Math.round(p * 100)}%`;
-  const facts = r.facts.length
-    ? `<ul class="jev-facts">${r.facts.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>${
-        r.factsDropped ? `<p class="muted">(+${r.factsDropped} more not shown to the model)</p>` : ""
-      }`
-    : `<p class="muted">Nothing unusual was observed.</p>`;
+  const findings = r.findings.length
+    ? `<ul class="jev-findings">${r.findings
+        .map((f) => {
+          const a = jevAnswer(f);
+          return `<li>
+            <span class="risk ${a.css}">${a.label}</span>
+            <strong>${escapeHtml(JEV_ASPECT[f.aspect] ?? f.aspect)}</strong>
+            <span class="muted">concern ${pct(f.concern)}</span>
+            <details><summary class="muted">${f.facts.length} fact(s)</summary>
+              <p class="muted">${escapeHtml(f.question)}</p>
+              <ul class="jev-facts">${f.facts.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+            </details>
+          </li>`;
+        })
+        .join("")}</ul>`
+    : `<p class="muted">Nothing noteworthy was observed, so there was nothing to ask the model about.</p>`;
+  const components = r.components?.length
+    ? `<p class="muted">Context: ${r.components.map(escapeHtml).join(" ")}</p>`
+    : "";
   return `
     <p><span class="risk ${v.css}">${v.label}</span>
-      <span class="muted">expected ${pct(pn)} · unusual ${pct(pq)} · abusive ${pct(pb)}</span></p>
-    <div class="dash-bar jev-bar" role="img" aria-label="expected ${pct(pn)}, unusual ${pct(pq)}, abusive ${pct(pb)}">
-      <span class="dash-bar-seg ok" style="flex-grow:${pn}"></span>
-      <span class="dash-bar-seg warn" style="flex-grow:${pq}"></span>
-      <span class="dash-bar-seg bad" style="flex-grow:${pb}"></span>
-    </div>
-    <details class="binmeta-list"><summary class="muted">What the model saw (${r.facts.length})</summary>${facts}</details>
+      <span class="muted">${r.findings.filter((f) => f.flagged).length} of ${r.findings.length} aspect(s) raised a concern</span></p>
+    ${findings}${components}
     <p class="muted">A language model's opinion, not a verdict — it doesn't change the risk rating.
       <button type="button" data-jev="run">Re-assess</button></p>`;
 }
@@ -2227,9 +2249,11 @@ function renderJevCard() {
   const needsModel = [...jevState.values()].some((s) => s.status === "needs-model") || jevModel?.cached === false;
   const counts = { normal: 0, questionable: 0, bad: 0 };
   for (const { r } of assessed) counts[r.verdict]++;
+  const concerns = (r) => r.findings.filter((f) => f.flagged);
+  const maxConcern = (r) => Math.max(0, ...concerns(r).map((f) => f.concern));
   const flagged = assessed
     .filter(({ r }) => r.verdict !== "normal")
-    .sort((a, b) => b.r.probabilities[2] - a.r.probabilities[2] || b.r.probabilities[1] - a.r.probabilities[1]);
+    .sort((a, b) => concerns(b.r).length - concerns(a.r).length || maxConcern(b.r) - maxConcern(a.r));
 
   let controls;
   if (jevSweep) {
@@ -2242,7 +2266,7 @@ function renderJevCard() {
     const remaining = rows.size - assessed.length;
     controls = remaining
       ? `<p><button type="button" data-dash-action="jev-sweep">Assess ${assessed.length ? `remaining ${remaining}` : `all ${remaining}`} app(s)</button>
-          <span class="muted">~${Math.max(1, Math.round((remaining * 3.5) / 60))} min, runs on this device</span></p>`
+          <span class="muted">runs on this device; the model is unloaded again when done</span></p>`
       : "";
   }
   const summary = assessed.length
@@ -2258,9 +2282,8 @@ function renderJevCard() {
             <span class="risk ${v.css}">${v.label}</span>
             <span class="dash-app-main">
               <span class="dash-app-name">${escapeHtml(appName(det))}</span>
-              <ul class="dash-why">${r.facts
-                .slice(0, 3)
-                .map((f) => `<li class="muted">${escapeHtml(f)}</li>`)
+              <ul class="dash-why">${concerns(r)
+                .map((f) => `<li class="warn">${escapeHtml(JEV_ASPECT[f.aspect] ?? f.aspect)}: ${escapeHtml(f.facts[0] ?? "")}</li>`)
                 .join("")}</ul>
             </span></button></li>`;
         })

@@ -8,13 +8,21 @@
 //! logits gives a probability per choice — deterministic, one pass, and the
 //! model can't answer anything but one of the options.
 //!
+//! Two prompt shapes share that readout:
+//! * [`Jev::classify`] — the blog's free-text subject + choices.
+//! * [`Jev::decide`] — SemIf/OpenJev's (<https://openjev.com>) typed decision:
+//!   JSON evidence, one criterion, and described options (typically including
+//!   an "insufficient evidence" escape). Put shared evidence first so many
+//!   criteria can be asked about the same state.
+//!
 //! Everything runs locally through `tauri-plugin-llm`'s candle backends (Metal
-//! on macOS). The only network access is the one-time model download in
-//! [`ModelFiles::fetch`]; [`ModelFiles::cached`] never touches the network.
+//! on macOS), from BF16 safetensors or quantized GGUF. The only network access
+//! is the one-time model download in [`ModelFiles::fetch`];
+//! [`ModelFiles::cached`] never touches the network.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), jev::JevError> {
-//! let files = jev::ModelFiles::fetch(jev::DEFAULT_MODEL)?;
+//! let files = jev::ModelFiles::fetch(&jev::DEFAULT_MODEL)?;
 //! let mut jev = jev::Jev::load(&files)?;
 //! let result = jev.classify(
 //!     "Choose one option.",
@@ -31,13 +39,37 @@ pub mod watchdog;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri_plugin_llm::backend::{create_backend_by_model_file, create_backend_by_model_index_file, ModelBackend};
+use tauri_plugin_llm::backend::{
+    create_backend_by_gguf_file, create_backend_by_model_file, create_backend_by_model_index_file, ModelBackend,
+};
 use tauri_plugin_llm::candle_core::{DType, Device, Tensor};
 use tauri_plugin_llm::tokenizers::Tokenizer;
 
-/// The model the original Jev uses (as full-precision safetensors; the
-/// plugin's candle backends don't load the blog's Q8_0 GGUF).
-pub const DEFAULT_MODEL: &str = "Qwen/Qwen3-0.6B";
+/// Where to get a model from Hugging Face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSource {
+    /// BF16 safetensors (single file or sharded), e.g. `Qwen/Qwen3-0.6B`.
+    Safetensors { repo: &'static str },
+    /// One quantized GGUF file. GGUF repos rarely ship `tokenizer.json`, so
+    /// it comes from the base model's repo.
+    Gguf {
+        repo: &'static str,
+        file: &'static str,
+        tokenizer_repo: &'static str,
+    },
+}
+
+impl ModelSource {
+    /// The id the plugin dispatches backends on (it matches family names).
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Safetensors { repo } | Self::Gguf { repo, .. } => repo,
+        }
+    }
+}
+
+/// The model the original Jev uses (as BF16 safetensors).
+pub const DEFAULT_MODEL: ModelSource = ModelSource::Safetensors { repo: "Qwen/Qwen3-0.6B" };
 
 const CONFIG_FILE: &str = "config.json";
 const TOKENIZER_FILE: &str = "tokenizer.json";
@@ -49,6 +81,9 @@ const LABELS: [&str; 26] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
     "T", "U", "V", "W", "X", "Y", "Z",
 ];
+
+/// SemIf's direct-decision instruction, verbatim.
+pub const DECIDE_SYSTEM: &str = "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. Respond with only its uppercase letter, with no explanation or reasoning.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum JevError {
@@ -66,46 +101,49 @@ pub enum JevError {
     ChoiceCount(usize),
     #[error("weights index: {0}")]
     Index(String),
+    #[error("{0} needs a config.json")]
+    MissingConfig(String),
     #[error("label {0:?} is not a single token for this tokenizer")]
     LabelToken(String),
 }
 
 pub type Result<T> = std::result::Result<T, JevError>;
 
-/// Where a model's safetensors weights live.
+/// Where a model's weights live on disk.
 #[derive(Debug, Clone)]
 pub enum Weights {
     /// One `model.safetensors` (small models such as Qwen3-0.6B).
     Single(PathBuf),
     /// `model.safetensors.index.json` plus the shards it names, all in `dir`.
     Sharded { index: PathBuf, dir: PathBuf },
+    /// A quantized `.gguf` (carries its own architecture config).
+    Gguf(PathBuf),
 }
 
-/// Local paths to the files a Qwen3 safetensors model needs.
+/// Local paths to everything a model needs.
 #[derive(Debug, Clone)]
 pub struct ModelFiles {
-    /// Hugging Face repo id, e.g. `Qwen/Qwen3-0.6B`. The plugin picks its
-    /// backend by model family name, so this must name the family.
+    /// The plugin picks its backend by family name, so this must name it.
     pub model_id: String,
-    pub config: PathBuf,
+    /// `config.json` — required for safetensors, unused for GGUF.
+    pub config: Option<PathBuf>,
     pub tokenizer: PathBuf,
     pub weights: Weights,
 }
 
 impl ModelFiles {
-    /// Resolve the model from the Hugging Face cache, downloading what's
-    /// missing (~1.5 GB for Qwen3-0.6B on first use).
-    pub fn fetch(model_id: &str) -> Result<Self> {
-        Self::resolve(model_id, false)
+    /// Resolve the model from the Hugging Face cache, downloading what's missing.
+    pub fn fetch(source: &ModelSource) -> Result<Self> {
+        Self::resolve(source, false)
     }
 
     /// Resolve the model from the Hugging Face cache only — never touches the
     /// network. Fails with [`JevError::NotCached`] if anything is missing.
-    pub fn cached(model_id: &str) -> Result<Self> {
-        Self::resolve(model_id, true)
+    pub fn cached(source: &ModelSource) -> Result<Self> {
+        Self::resolve(source, true)
     }
 
-    /// Use model files from a plain directory (e.g. one shipped next to the app).
+    /// Use safetensors model files from a plain directory.
     pub fn from_dir(model_id: &str, dir: &Path) -> Self {
         let index = dir.join(WEIGHTS_INDEX_FILE);
         let weights = if index.exists() {
@@ -115,46 +153,61 @@ impl ModelFiles {
         };
         Self {
             model_id: model_id.to_string(),
-            config: dir.join(CONFIG_FILE),
+            config: Some(dir.join(CONFIG_FILE)),
             tokenizer: dir.join(TOKENIZER_FILE),
             weights,
         }
     }
 
-    fn resolve(model_id: &str, local_only: bool) -> Result<Self> {
+    fn resolve(source: &ModelSource, local_only: bool) -> Result<Self> {
         let client = hf_hub::HFClient::builder().build_sync()?;
-        let (owner, name) = hf_hub::split_id(model_id);
-        let repo = client.model(owner, name);
-        let get = |filename: &str| {
-            repo.download_file()
+        let get = |repo_id: &str, filename: &str| {
+            let (owner, name) = hf_hub::split_id(repo_id);
+            client
+                .model(owner, name)
+                .download_file()
                 .filename(filename)
                 .local_files_only(local_only)
                 .send()
                 .map_err(|e| match e {
-                    hf_hub::HFError::LocalEntryNotFound { .. } => JevError::NotCached(model_id.to_string()),
+                    hf_hub::HFError::LocalEntryNotFound { .. } => JevError::NotCached(source.id().to_string()),
                     e => JevError::Hub(e),
                 })
         };
-        // Larger models ship sharded: prefer the index when the repo has one.
-        let weights = match get(WEIGHTS_INDEX_FILE) {
-            Ok(index) => {
-                for shard in shard_files(&index)? {
-                    get(&shard)?;
-                }
-                let dir = index.parent().map(Path::to_path_buf).unwrap_or_default();
-                Weights::Sharded { index, dir }
+        match *source {
+            ModelSource::Gguf {
+                repo,
+                file,
+                tokenizer_repo,
+            } => Ok(Self {
+                model_id: repo.to_string(),
+                config: None,
+                tokenizer: get(tokenizer_repo, TOKENIZER_FILE)?,
+                weights: Weights::Gguf(get(repo, file)?),
+            }),
+            ModelSource::Safetensors { repo } => {
+                // Larger models ship sharded: prefer the index when the repo has one.
+                let weights = match get(repo, WEIGHTS_INDEX_FILE) {
+                    Ok(index) => {
+                        for shard in shard_files(&index)? {
+                            get(repo, &shard)?;
+                        }
+                        let dir = index.parent().map(Path::to_path_buf).unwrap_or_default();
+                        Weights::Sharded { index, dir }
+                    }
+                    Err(JevError::Hub(hf_hub::HFError::EntryNotFound { .. })) | Err(JevError::NotCached(_)) => {
+                        Weights::Single(get(repo, WEIGHTS_FILE)?)
+                    }
+                    Err(e) => return Err(e),
+                };
+                Ok(Self {
+                    model_id: repo.to_string(),
+                    config: Some(get(repo, CONFIG_FILE)?),
+                    tokenizer: get(repo, TOKENIZER_FILE)?,
+                    weights,
+                })
             }
-            Err(JevError::Hub(hf_hub::HFError::EntryNotFound { .. })) | Err(JevError::NotCached(_)) => {
-                Weights::Single(get(WEIGHTS_FILE)?)
-            }
-            Err(e) => return Err(e),
-        };
-        Ok(Self {
-            model_id: model_id.to_string(),
-            config: get(CONFIG_FILE)?,
-            tokenizer: get(TOKENIZER_FILE)?,
-            weights,
-        })
+        }
     }
 }
 
@@ -178,6 +231,7 @@ fn shard_files(index: &Path) -> Result<Vec<String>> {
 #[serde(rename_all = "camelCase")]
 pub struct Score {
     pub label: String,
+    /// The choice text ([`Jev::classify`]) or option id ([`Jev::decide`]).
     pub choice: String,
     /// Raw logit of the label token.
     pub logit: f32,
@@ -201,14 +255,21 @@ impl Classification {
             .expect("a classification always has at least two choices")
     }
 
-    /// Probability of the choice with this exact text, if it was offered.
+    /// Probability of the choice (or option id) with this exact text.
     pub fn probability(&self, choice: &str) -> Option<f32> {
         self.scores.iter().find(|s| s.choice == choice).map(|s| s.probability)
     }
 }
 
+/// A described option for [`Jev::decide`].
+#[derive(Debug, Clone, Copy)]
+pub struct Opt<'a> {
+    pub id: &'a str,
+    pub description: &'a str,
+}
+
 /// A loaded model, ready to classify. Loading is the expensive part — keep
-/// one around and call [`Jev::classify`] repeatedly.
+/// one around while there's work, drop it when idle to free its memory.
 pub struct Jev {
     backend: Box<dyn ModelBackend>,
     tokenizer: Tokenizer,
@@ -225,11 +286,13 @@ impl Jev {
     }
 
     pub fn load_on(files: &ModelFiles, device: Device) -> Result<Self> {
+        let config = || files.config.as_ref().ok_or_else(|| JevError::MissingConfig(files.model_id.clone()));
         let backend = match &files.weights {
-            Weights::Single(file) => create_backend_by_model_file(&files.model_id, &device, file, &files.config)?,
+            Weights::Single(file) => create_backend_by_model_file(&files.model_id, &device, file, config()?)?,
             Weights::Sharded { index, dir } => {
-                create_backend_by_model_index_file(&files.model_id, &device, index, dir, &files.config)?
+                create_backend_by_model_index_file(&files.model_id, &device, index, dir, config()?)?
             }
+            Weights::Gguf(file) => create_backend_by_gguf_file(&files.model_id, &device, file)?,
         };
         let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| JevError::Tokenizer(e.to_string()))?;
         Ok(Self {
@@ -245,16 +308,32 @@ impl Jev {
     /// `subject` is the user turn's content before the options — include any
     /// framing (the original uses `"Email: …"`).
     pub fn classify(&mut self, system: &str, subject: &str, choices: &[&str]) -> Result<Classification> {
-        if choices.len() < 2 || choices.len() > LABELS.len() {
-            return Err(JevError::ChoiceCount(choices.len()));
-        }
-        let labels = &LABELS[..choices.len()];
+        let labels = labels_for(choices.len())?;
+        let options = labels
+            .iter()
+            .zip(choices)
+            .map(|(label, choice)| format!("{label}. {choice}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = chat_prompt(system, &format!("{subject}\n\n{options}"), self.empty_think);
+        self.score(&prompt, labels, choices)
+    }
+
+    /// SemIf-style typed decision: does `criterion` hold for `evidence`?
+    /// Scores are keyed by option id.
+    pub fn decide(&mut self, evidence: &serde_json::Value, criterion: &str, options: &[Opt<'_>]) -> Result<Classification> {
+        let labels = labels_for(options.len())?;
+        let prompt = chat_prompt(DECIDE_SYSTEM, &decision_payload(evidence, criterion, labels, options), self.empty_think);
+        let ids: Vec<&str> = options.iter().map(|o| o.id).collect();
+        self.score(&prompt, labels, &ids)
+    }
+
+    /// One forward pass over `prompt`; softmax over the label tokens' logits.
+    fn score(&mut self, prompt: &str, labels: &[&str], names: &[&str]) -> Result<Classification> {
         let label_ids = labels
             .iter()
             .map(|l| self.single_token(l))
             .collect::<Result<Vec<_>>>()?;
-
-        let prompt = build_prompt(system, subject, labels, choices, self.empty_think);
         // Special tokens (`<|im_start|>` …) are matched from the text itself;
         // Qwen has no BOS, so don't let the tokenizer add one.
         let ids = self
@@ -277,11 +356,11 @@ impl Jev {
         let logprobs = log_softmax(&choice_logits);
         let scores = labels
             .iter()
-            .zip(choices)
+            .zip(names)
             .zip(choice_logits.iter().zip(&logprobs))
-            .map(|((label, choice), (&logit, &logprob))| Score {
+            .map(|((label, name), (&logit, &logprob))| Score {
                 label: (*label).to_string(),
-                choice: (*choice).to_string(),
+                choice: (*name).to_string(),
                 logit,
                 logprob,
                 probability: logprob.exp(),
@@ -302,8 +381,15 @@ impl Jev {
     }
 }
 
-/// The Qwen3 chat prompt. With `empty_think`, an empty `<think>` block skips
-/// the reasoning phase so the very next token is the answer letter.
+fn labels_for(n: usize) -> Result<&'static [&'static str]> {
+    if n < 2 || n > LABELS.len() {
+        return Err(JevError::ChoiceCount(n));
+    }
+    Ok(&LABELS[..n])
+}
+
+/// The blog's prompt for [`Jev::classify`] (kept as a free function so the
+/// byte-for-byte test can pin it).
 pub fn build_prompt(system: &str, subject: &str, labels: &[&str], choices: &[&str], empty_think: bool) -> String {
     let options = labels
         .iter()
@@ -311,10 +397,31 @@ pub fn build_prompt(system: &str, subject: &str, labels: &[&str], choices: &[&st
         .map(|(label, choice)| format!("{label}. {choice}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let think = if empty_think { "<think>\n\n</think>\n\n" } else { "" };
+    chat_prompt(system, &format!("{subject}\n\n{options}"), empty_think)
+}
+
+/// SemIf's user turn: `{"evidence", "criterion", "options": [{letter, description}]}`.
+/// Evidence comes first, so decisions over the same state share a prefix.
+pub fn decision_payload(evidence: &serde_json::Value, criterion: &str, labels: &[&str], options: &[Opt<'_>]) -> String {
+    // Built by hand to pin SemIf's key order (serde_json maps sort keys).
+    let quote = |s: &str| serde_json::Value::String(s.to_string()).to_string();
+    let options = labels
+        .iter()
+        .zip(options)
+        .map(|(letter, o)| format!("{{\"letter\": {}, \"description\": {}}}", quote(letter), quote(o.description)))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{subject}\n\n{options}<|im_end|>\n<|im_start|>assistant\n{think}"
+        "{{\"evidence\": {evidence}, \"criterion\": {}, \"options\": [{options}]}}",
+        quote(criterion)
     )
+}
+
+/// The Qwen3 chat prompt. With `empty_think`, an empty `<think>` block skips
+/// the reasoning phase so the very next token is the answer letter.
+fn chat_prompt(system: &str, user: &str, empty_think: bool) -> String {
+    let think = if empty_think { "<think>\n\n</think>\n\n" } else { "" };
+    format!("<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n{think}")
 }
 
 /// Numerically stable log-softmax.
@@ -348,6 +455,23 @@ mod tests {
             true,
         );
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn decision_payload_keeps_semif_key_order() {
+        let got = decision_payload(
+            &serde_json::json!("The deployment completed."),
+            "Did it succeed?",
+            &["A", "B"],
+            &[
+                Opt { id: "yes", description: "It succeeded." },
+                Opt { id: "no", description: "It did not." },
+            ],
+        );
+        assert_eq!(
+            got,
+            r#"{"evidence": "The deployment completed.", "criterion": "Did it succeed?", "options": [{"letter": "A", "description": "It succeeded."}, {"letter": "B", "description": "It did not."}]}"#
+        );
     }
 
     #[test]
