@@ -2069,7 +2069,7 @@ detailBody.addEventListener("click", (e) => {
     .finally(() => refreshLicenses(det));
 });
 
-// ---------- behaviour watchdog — LOCAL ONLY until November ----------------
+// ---------- behaviour watchdog ----------------
 // Machine-wide: every launchd agent/daemon and browser native-messaging host,
 // attributed to an installed app (bundle, signing team, package manager, or
 // optionally Jev — an on-device model — for name-only matches), checked

@@ -1,0 +1,385 @@
+{
+ "about": "Ownership questions derived from persistence.json: which installed app (if any) does each background item belong to, judging by label, program path and signing team? 'accept' lists acceptable answers (null = none of the listed apps). Judged on names, not signatures - impersonators (fake Chrome updater) are expected to *look like* their target; the team-mismatch rule then catches them.",
+ "apps": [
+  {
+   "name": "Google Chrome",
+   "bundleId": "com.google.Chrome",
+   "path": "/Applications/Google Chrome.app",
+   "teamId": "EQHXZ8M8AV"
+  },
+  {
+   "name": "Microsoft Word",
+   "bundleId": "com.microsoft.Word",
+   "path": "/Applications/Microsoft Word.app",
+   "teamId": "UBF8T346G9"
+  },
+  {
+   "name": "Microsoft Excel",
+   "bundleId": "com.microsoft.Excel",
+   "path": "/Applications/Microsoft Excel.app",
+   "teamId": "UBF8T346G9"
+  },
+  {
+   "name": "OneDrive",
+   "bundleId": "com.microsoft.OneDrive",
+   "path": "/Applications/OneDrive.app",
+   "teamId": "UBF8T346G9"
+  },
+  {
+   "name": "zoom.us",
+   "bundleId": "us.zoom.xos",
+   "path": "/Applications/zoom.us.app",
+   "teamId": "BJ4HAAB9B3"
+  },
+  {
+   "name": "Little Snitch",
+   "bundleId": "at.obdev.littlesnitch",
+   "path": "/Applications/Little Snitch.app",
+   "teamId": "MLZF7K7B5R"
+  },
+  {
+   "name": "Cloudflare WARP",
+   "bundleId": "com.cloudflare.1dot1dot1dot1.macos",
+   "path": "/Applications/Cloudflare WARP.app",
+   "teamId": "68WVV388M8"
+  },
+  {
+   "name": "1Password",
+   "bundleId": "com.1password.1password",
+   "path": "/Applications/1Password.app",
+   "teamId": "2BUA8C4S2C"
+  },
+  {
+   "name": "Strada",
+   "bundleId": "com.strada.app",
+   "path": "/Applications/Strada.app",
+   "teamId": "4K8R2Q7XNM"
+  },
+  {
+   "name": "Safari",
+   "bundleId": "com.apple.Safari",
+   "path": "/Applications/Safari.app",
+   "teamId": null
+  },
+  {
+   "name": "PDF Converter",
+   "bundleId": "com.pdfconverterpro.mac",
+   "path": "/Applications/PDF Converter.app",
+   "teamId": "7XQ2K9M4PL"
+  }
+ ],
+ "cases": [
+  {
+   "label": "com.google.GoogleUpdater.wake",
+   "program": "/Users/u/Library/Application Support/Google/GoogleUpdater/Current/GoogleUpdater.app/Contents/MacOS/GoogleUpdater",
+   "source": "/Users/u/Library/LaunchAgents/com.google.GoogleUpdater.wake.plist",
+   "signingTeam": "EQHXZ8M8AV",
+   "accept": [
+    "Google Chrome"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.microsoft.update.agent",
+   "program": "/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app/Contents/MacOS/Microsoft Update Assistant.app/Contents/MacOS/Microsoft Update Assistant",
+   "source": "/Library/LaunchAgents/com.microsoft.update.agent.plist",
+   "signingTeam": "UBF8T346G9",
+   "accept": [
+    "Microsoft Excel",
+    "Microsoft Word",
+    "OneDrive"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.microsoft.office.licensingV2.helper",
+   "program": "/Library/PrivilegedHelperTools/com.microsoft.office.licensingV2.helper",
+   "source": "/Library/LaunchDaemons/com.microsoft.office.licensingV2.helper.plist",
+   "signingTeam": "UBF8T346G9",
+   "accept": [
+    "Microsoft Excel",
+    "Microsoft Word",
+    "OneDrive"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "us.zoom.ZoomDaemon",
+   "program": "/Library/PrivilegedHelperTools/us.zoom.ZoomDaemon",
+   "source": "/Library/LaunchDaemons/us.zoom.ZoomDaemon.plist",
+   "signingTeam": "BJ4HAAB9B3",
+   "accept": [
+    "zoom.us"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "us.zoom.updater",
+   "program": "/Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater",
+   "source": "/Library/LaunchAgents/us.zoom.updater.plist",
+   "signingTeam": "BJ4HAAB9B3",
+   "accept": [
+    "zoom.us"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "at.obdev.littlesnitch.daemon",
+   "program": "/Library/Application Support/Objective Development/Little Snitch/Components/at.obdev.littlesnitch.daemon.bundle/Contents/MacOS/at.obdev.littlesnitch.daemon",
+   "source": "/Library/LaunchDaemons/at.obdev.littlesnitch.daemon.plist",
+   "signingTeam": "MLZF7K7B5R",
+   "accept": [
+    "Little Snitch"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.cloudflare.1dot1dot1dot1.macos.warp.daemon",
+   "program": "/Applications/Cloudflare WARP.app/Contents/Resources/CloudflareWARP",
+   "source": "/Library/LaunchDaemons/com.cloudflare.1dot1dot1dot1.macos.warp.daemon.plist",
+   "signingTeam": "68WVV388M8",
+   "accept": [
+    "Cloudflare WARP"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.microsoft.OneDriveUpdaterDaemon",
+   "program": "/Applications/OneDrive.app/Contents/OneDriveUpdaterDaemon.xpc/Contents/MacOS/OneDriveUpdaterDaemon",
+   "source": "/Library/LaunchDaemons/com.microsoft.OneDriveUpdaterDaemon.plist",
+   "signingTeam": "UBF8T346G9",
+   "accept": [
+    "OneDrive"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "StradaHelper",
+   "program": "/Applications/Strada.app/Contents/Library/agent-helper",
+   "source": "/Users/u/Library/LaunchAgents/StradaHelper.plist",
+   "signingTeam": "4K8R2Q7XNM",
+   "accept": [
+    "Strada"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "homebrew.mxcl.postgresql@16",
+   "program": "/opt/homebrew/opt/postgresql@16/bin/postgres",
+   "source": "/Users/u/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.1password.1password",
+   "program": "/Applications/1Password.app/Contents/Library/LoginItems/1Password Browser Helper.app/Contents/MacOS/1Password-BrowserSupport",
+   "source": "/Users/u/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.1password.1password.json",
+   "signingTeam": "2BUA8C4S2C",
+   "accept": [
+    "1Password"
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.oldvendor.syncer",
+   "program": "/Applications/OldVendor Sync.app/Contents/MacOS/syncer",
+   "source": "/Users/u/Library/LaunchAgents/com.oldvendor.syncer.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "Tchap",
+   "program": "/Users/u/git/tchap-desktop/src-tauri/target/debug/tchap-desktop",
+   "source": "/Users/u/Library/LaunchAgents/Tchap.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "benign",
+   "family": null
+  },
+  {
+   "label": "com.ActivityInputd.service",
+   "program": "/Users/u/Library/Application Support/.ActivityInputd/ActivityInputd",
+   "source": "/Users/u/Library/LaunchAgents/com.ActivityInputd.service.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Adload"
+  },
+  {
+   "label": "com.TrustedSearchDaemon.system",
+   "program": "/Library/Application Support/.TrustedSearch/TrustedSearchDaemon",
+   "source": "/Library/LaunchDaemons/com.TrustedSearchDaemon.system.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Adload"
+  },
+  {
+   "label": "init_verx",
+   "program": "/bin/sh",
+   "source": "/Users/u/Library/LaunchAgents/init_verx.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Silver Sparrow"
+  },
+  {
+   "label": "com.mcpzqe7k2.agent",
+   "program": "/Users/Shared/.mcpzqe7k2/mcpzqe",
+   "source": "/Users/u/Library/LaunchAgents/com.mcpzqe7k2.agent.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Shlayer/Bundlore"
+  },
+  {
+   "label": "com.apple.questd",
+   "program": "/Users/u/Library/AppQuest/com.apple.questd",
+   "source": "/Users/u/Library/LaunchAgents/com.apple.questd.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "EvilQuest"
+  },
+  {
+   "label": "com.apple.questd",
+   "program": "/Library/AppQuest/com.apple.questd",
+   "source": "/Library/LaunchDaemons/com.apple.questd.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "EvilQuest"
+  },
+  {
+   "label": "com.startup",
+   "program": "/bin/bash",
+   "source": "/Library/LaunchDaemons/com.startup.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "cryptominer"
+  },
+  {
+   "label": "com.apple.FY9",
+   "program": "/usr/bin/osascript",
+   "source": "/Users/u/Library/LaunchAgents/com.apple.FY9.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "OSAMiner"
+  },
+  {
+   "label": "com.KeyboardLayoutService.agent",
+   "program": "/Library/Application Support/KeyboardLayoutService/KeyboardLayoutService",
+   "source": "/Library/LaunchDaemons/com.KeyboardLayoutService.agent.plist",
+   "signingTeam": "ZQ3P8N2LM4",
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Pirrit"
+  },
+  {
+   "label": "com.searchmine.native",
+   "program": "/Users/u/Library/Application Support/SearchMine/smhost",
+   "source": "/Users/u/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.searchmine.native.json",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "browser adware"
+  },
+  {
+   "label": "com.google.Chrome.update",
+   "program": "/Users/u/Library/Caches/com.google.Chrome.update/update",
+   "source": "/Users/u/Library/LaunchAgents/com.google.Chrome.update.plist",
+   "signingTeam": null,
+   "accept": [
+    "Google Chrome"
+   ],
+   "kind": "malicious",
+   "family": "XCSSET"
+  },
+  {
+   "label": "com.apple.googlechrome",
+   "program": "/Library/Application Support/com.apple.googlechrome/googlechrome",
+   "source": "/Users/u/Library/LaunchAgents/com.apple.googlechrome.plist",
+   "signingTeam": null,
+   "accept": [
+    "Google Chrome"
+   ],
+   "kind": "malicious",
+   "family": "KeySteal"
+  },
+  {
+   "label": "com.apple.safariupdate",
+   "program": "/Users/u/Library/Metadata/System Update",
+   "source": "/Users/u/Library/LaunchAgents/com.apple.safariupdate.plist",
+   "signingTeam": null,
+   "accept": [
+    "Safari"
+   ],
+   "kind": "malicious",
+   "family": "JokerSpy"
+  },
+  {
+   "label": "com.user.upd",
+   "program": "/Users/u/.local-6c2e9d1f/pplauncher",
+   "source": "/Users/u/Library/LaunchAgents/com.user.upd.plist",
+   "signingTeam": null,
+   "accept": [
+    null
+   ],
+   "kind": "malicious",
+   "family": "Cuckoo"
+  },
+  {
+   "label": "com.pdfconverterpro.helper",
+   "program": "/Library/Application Support/PDF Converter/helper",
+   "source": "/Library/LaunchAgents/com.pdfconverterpro.helper.plist",
+   "signingTeam": "7XQ2K9M4PL",
+   "accept": [
+    "PDF Converter"
+   ],
+   "kind": "malicious",
+   "family": "signed adware (generic)"
+  }
+ ]
+}

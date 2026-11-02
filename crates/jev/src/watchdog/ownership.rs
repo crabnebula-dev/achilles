@@ -109,7 +109,10 @@ fn deterministic(item: &PersistenceItem, apps: &[InstalledApp]) -> Option<Owner>
 
 /// Ask Jev which candidate app (if any) the item belongs to.
 fn ask(jev: &mut Jev, item: &PersistenceItem, apps: &[InstalledApp]) -> Result<Owner> {
-    let candidates = candidates(item, apps);
+    ask_among(jev, item, &candidates(item, apps))
+}
+
+fn ask_among(jev: &mut Jev, item: &PersistenceItem, candidates: &[&InstalledApp]) -> Result<Owner> {
     if candidates.is_empty() {
         return Ok(Owner::Unknown);
     }
@@ -290,5 +293,99 @@ mod tests {
         let c = candidates(&i, &apps);
         assert_eq!(c.first().map(|a| a.name.as_str()), Some("Zoom"));
         assert!(c.iter().all(|a| !a.name.starts_with("Microsoft")));
+    }
+}
+
+/// Ownership accuracy on `eval/ownership.json`, against a no-model baseline
+/// (top name-token candidate) — `cargo test -p jev --release
+/// watchdog::ownership::eval -- --ignored --nocapture`. Compare with Laya via
+/// the Python harness noted in the commit history.
+#[cfg(test)]
+mod eval {
+    use super::super::{ItemKind, Signature};
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct Fixture {
+        apps: Vec<InstalledApp>,
+        cases: Vec<Case>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Case {
+        label: String,
+        program: String,
+        source: String,
+        signing_team: Option<String>,
+        accept: Vec<Option<String>>,
+    }
+
+    fn item(c: &Case) -> PersistenceItem {
+        PersistenceItem {
+            kind: ItemKind::UserAgent,
+            source: c.source.clone(),
+            label: Some(c.label.clone()),
+            program: c.program.clone(),
+            arguments: vec![],
+            run_at_load: false,
+            keep_alive: false,
+            program_exists: true,
+            signature: Some(Signature {
+                signed: true,
+                team_id: c.signing_team.clone(),
+                apple: false,
+            }),
+        }
+    }
+
+    fn name(o: &Owner) -> Option<String> {
+        match o {
+            Owner::Model { app, .. } => Some(app.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn eval() {
+        let f: Fixture = serde_json::from_str(include_str!("../../eval/ownership.json")).unwrap();
+        let mut jev = Jev::load(&crate::ModelFiles::cached(&super::super::MODEL).expect("model cached")).unwrap();
+        let (mut base, mut pipe, mut all, mut calls) = (0, 0, 0, 0);
+        let t = std::time::Instant::now();
+        for c in &f.cases {
+            let it = item(c);
+            let cands = candidates(&it, &f.apps);
+            // Baseline: no model, take the top-ranked candidate (or none).
+            let b = cands.first().map(|a| a.name.clone());
+            // Pipeline: ask Jev only when there are candidates.
+            let p = if cands.is_empty() {
+                None
+            } else {
+                calls += 1;
+                name(&ask(&mut jev, &it, &f.apps).unwrap())
+            };
+            // Hard mode: every installed app is a candidate.
+            let all_apps: Vec<InstalledApp> = f.apps.clone();
+            let a = name(&ask_among(&mut jev, &it, &all_apps.iter().collect::<Vec<_>>()).unwrap());
+            let ok = |x: &Option<String>| c.accept.contains(x);
+            base += ok(&b) as usize;
+            pipe += ok(&p) as usize;
+            all += ok(&a) as usize;
+            println!(
+                "{:<46} base {:<4} jev {:<4} jev-all {:<4}  (jev said {:?})",
+                c.label,
+                if ok(&b) { "✓" } else { "✗" },
+                if ok(&p) { "✓" } else { "✗" },
+                if ok(&a) { "✓" } else { "✗" },
+                p
+            );
+        }
+        let n = f.cases.len();
+        println!(
+            "baseline {base}/{n} · jev pipeline {pipe}/{n} ({calls} calls) · jev all-apps {all}/{n} · {:.0?} total",
+            t.elapsed()
+        );
     }
 }

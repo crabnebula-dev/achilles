@@ -1,4 +1,4 @@
-//! Behaviour watchdog (LOCAL ONLY until November).
+//! Behaviour watchdog
 //!
 //! Inventories everything on the machine that runs in the background or
 //! bridges into a browser (launchd agents/daemons, native-messaging hosts),

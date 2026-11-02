@@ -6,7 +6,6 @@ license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [dependencies]
-# LOCAL ONLY until November: path dependency on the `jev-logits` branch of a
 # local tauri-plugin-llm checkout, which exposes the model backends.
 tauri-plugin-llm = { path = "../../../tauri-plugin-llm" }
 hf-hub = { version = "1", features = ["blocking"] }
