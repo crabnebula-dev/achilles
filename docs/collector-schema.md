@@ -68,15 +68,15 @@ Authorization: Bearer <token>      # omitted if no token is configured
   (non-embedded-webview) apps that are positively identified are included with
   `framework: "native"` and usually an empty `runtimes`.
 - **`runtimes`** keys present only when detected:
-  `electron`, `chromium`, `node`, `tauri`, `cef`, `nwjs`, `flutter`, `qt`,
-  `react_native`, `wails`, `sciter`, `java`, `webkit`. A Tauri app that also
-  bundles CEF reports both `tauri` and `cef`.
+  `electron`, `chromium`, `node`, `tauri`, `deno`, `cef`, `nwjs`, `flutter`,
+  `qt`, `react_native`, `wails`, `sciter`, `java`, `webkit`. A Tauri app that
+  also bundles CEF reports both `tauri` and `cef`.
 
 ### `framework` values
 
 Lowercase strings: `electron`, `tauri`, `nwjs`, `flutter`, `qt`,
-`reactnative`, `wails`, `sciter`, `java`, `safari`, `cef`, `chromiumbrowser`,
-`native`. (`unknown` is filtered out and never sent.)
+`reactnative`, `wails`, `deno`, `sciter`, `java`, `safari`, `cef`,
+`chromiumbrowser`, `native`. (`unknown` is filtered out and never sent.)
 
 ## Idempotency / dedup guidance
 
