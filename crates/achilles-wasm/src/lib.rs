@@ -11,4 +11,9 @@ mod bindings;
 #[cfg(target_arch = "wasm32")]
 pub use bindings::*;
 
+// Zip upload unpacking: used by the wasm bindings; built natively only for its tests
+// (zip is a wasm-only dependency).
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod unzip;
+
 pub mod upload;

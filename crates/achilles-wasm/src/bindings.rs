@@ -24,13 +24,13 @@
 //! `{ detection, audit, staticScan, platform, notes }` — the shape Tauri's
 //! `invoke` delivers — which the UI shim re-splits into per-command results.
 
-use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
 use detect::DiscoveredApp;
 use vfs::{MemTree, Platform};
 use wasm_bindgen::prelude::*;
 
+use crate::unzip::unzip_into;
 use crate::upload;
 
 /// Synthetic root the upload/scan is unpacked under. The analysis crates treat
@@ -163,7 +163,7 @@ pub fn analyze_app(
             );
         }
         Upload::Zip => {
-            if let Err(e) = unzip_into(&bytes, &mut tree) {
+            if let Err(e) = unzip_into(&bytes, &base, &mut TreeSink(&mut tree)) {
                 return Err(JsValue::from_str(&format!(
                     "could not read the uploaded zip: {e}"
                 )));
@@ -511,37 +511,4 @@ fn scan_target(root: Option<&std::path::Path>, platform: Platform) -> Option<Pat
 /// u32) is 4. A zip would start with `PK\x03\x04` instead.
 fn looks_like_asar(bytes: &[u8]) -> bool {
     bytes.len() >= 16 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 4
-}
-
-/// Unpack a zip archive into `tree` under [`SCAN_ROOT`], preserving unix modes
-/// and symlinks (macOS frameworks rely on `Versions/Current -> A`).
-fn unzip_into(bytes: &[u8], tree: &mut MemTree) -> Result<(), String> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    let base = PathBuf::from(SCAN_ROOT);
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-        // `enclosed_name` rejects path-traversal (`..`) entries.
-        let Some(rel) = entry.enclosed_name() else {
-            continue;
-        };
-        let dest = base.join(rel);
-        if entry.is_dir() {
-            tree.insert_dir(dest);
-            continue;
-        }
-        let mode = entry.unix_mode().unwrap_or(0o644);
-        // S_IFLNK
-        if mode & 0o170000 == 0o120000 {
-            let mut target = String::new();
-            entry
-                .read_to_string(&mut target)
-                .map_err(|e| e.to_string())?;
-            tree.insert_symlink(dest, PathBuf::from(target));
-            continue;
-        }
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        tree.insert_file_with_mode(dest, buf, mode);
-    }
-    Ok(())
 }

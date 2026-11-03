@@ -41,3 +41,6 @@ pkg.workspace = true
 # The native tests unpack real packages to a temp directory and then run the
 # same app-finding code the browser runs against the in-memory tree.
 pkg.workspace = true
+# The `unzip` tests write a real archive and read it back through `unzip_into`
+# on the host; in production zip is wasm-only (above).
+zip.workspace = true

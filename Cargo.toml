@@ -83,7 +83,7 @@ rayon = "1.10"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 # JS / TS AST parsing for the static-scan rules
 oxc_allocator = "0.126"
 oxc_ast = "0.126"
