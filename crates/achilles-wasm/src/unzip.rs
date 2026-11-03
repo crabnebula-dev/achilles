@@ -105,6 +105,67 @@ mod tests {
         );
     }
 
+    /// The upload is untrusted. Whatever zip does with a hostile name, nothing
+    /// may land outside the base and no `..` may reach the sink. The per-name
+    /// results pin zip 9.0.5 (zip 2 skipped the absolute and drive names).
+    #[test]
+    fn hostile_names_stay_under_the_base() {
+        let names = [
+            "/abs.txt",        // root stripped
+            "C:\\win.txt",     // drive prefix stripped
+            "..\\up.txt",      // backslash `..` treated as a separator
+            "a/../../esc.txt", // climbs above the archive root
+            "./ok.txt",        // current-dir component dropped
+        ];
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default();
+        for n in names {
+            // The writer stores these names verbatim.
+            w.start_file(n, opts).unwrap();
+            w.write_all(n.as_bytes()).unwrap();
+        }
+        let bytes = w.finish().unwrap().into_inner();
+
+        let base = Path::new("/scan");
+        let mut sink = Collector::default();
+        unzip_into(&bytes, base, &mut sink).unwrap();
+
+        // Invariant first.
+        for e in &sink.entries {
+            assert!(e.path().starts_with(base), "outside base: {:?}", e.path());
+            assert!(
+                e.path()
+                    .components()
+                    .all(|c| c != std::path::Component::ParentDir),
+                "`..` in {:?}",
+                e.path()
+            );
+        }
+
+        // Then what zip 9.0.5 does with each name.
+        let mut got: Vec<(PathBuf, Vec<u8>)> = sink
+            .entries
+            .iter()
+            .map(|e| match e {
+                Entry::File { path, data, .. } => (path.clone(), data.clone()),
+                other => panic!("unexpected entry {other:?}"),
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                // "/abs.txt" is accepted, relocated under the base.
+                (PathBuf::from("/scan/abs.txt"), b"/abs.txt".to_vec()),
+                // "./ok.txt" is accepted as "ok.txt".
+                (PathBuf::from("/scan/ok.txt"), b"./ok.txt".to_vec()),
+                // "C:\\win.txt" is accepted, drive stripped, under the base.
+                (PathBuf::from("/scan/win.txt"), b"C:\\win.txt".to_vec()),
+                // "..\\up.txt" and "a/../../esc.txt" are skipped (not listed).
+            ]
+        );
+    }
+
     #[test]
     fn rejects_garbage() {
         let mut sink = Collector::default();
