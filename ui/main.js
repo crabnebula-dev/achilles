@@ -647,7 +647,8 @@ function cveIds(cves) {
   if (!cves) return ids;
   for (const [k, v] of Object.entries(cves)) {
     if (k === "errors" || k === "unavailable" || !Array.isArray(v)) continue;
-    for (const a of v) if (a?.id) ids.add(a.id);
+    // Compare merged ids, as rendered — not the raw per-source ones.
+    for (const a of uniqueAdvisories(v)) if (a?.id) ids.add(a.id);
   }
   return ids;
 }
@@ -755,6 +756,32 @@ function sortBySeverity(list) {
   return [...list].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
 }
 
+// The same CVE often comes back from more than one source. The backend keeps one
+// record per source; here we collapse them to one entry per id so the list and
+// its counts don't reflect duplicates.
+function uniqueAdvisories(list) {
+  const byId = new Map();
+  let unkeyed = 0;
+  for (const a of list ?? []) {
+    // `GHSA-unknown` is a placeholder for advisories with no id at all — those
+    // are distinct records, never the same one twice.
+    const key =
+      a.id === "GHSA-unknown"
+        ? `\0${unkeyed++}`
+        : [a.id, ...(a.aliases ?? [])].find((x) => x?.startsWith("CVE-")) ?? a.id;
+    const prev = byId.get(key);
+    if (!prev) {
+      // Show the CVE id whenever one is known, whichever sources answered.
+      byId.set(key, { ...a, id: key.startsWith("CVE-") ? key : a.id });
+      continue;
+    }
+    if (severityRank(a.severity) > severityRank(prev.severity)) prev.severity = a.severity;
+    prev.fixed_in ??= a.fixed_in;
+    if ((a.summary ?? "").length > (prev.summary ?? "").length) prev.summary = a.summary;
+  }
+  return [...byId.values()];
+}
+
 // One advisory, collapsed by default: the summary shows the CVE id (+ severity
 // and fix), and the description reveals on expand — these lists get long.
 function renderAdvisory(a) {
@@ -789,7 +816,7 @@ function runtimeCvesContent(cves) {
   let count = 0;
 
   for (const { key, label } of RUNTIME_CVE_SOURCES) {
-    const list = sortBySeverity(cves[key] ?? []);
+    const list = sortBySeverity(uniqueAdvisories(cves[key]));
     if (list.length === 0) continue;
     count += list.length;
     parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">${escapeHtml(label)} — ${list.length}</p>`);
@@ -2719,7 +2746,7 @@ function riskReasons(det, findings) {
     let total = 0;
     let high = 0;
     for (const { key } of RUNTIME_CVE_SOURCES) {
-      for (const a of cves[key] ?? []) {
+      for (const a of uniqueAdvisories(cves[key])) {
         total++;
         if (severityRank(a.severity) >= 3) high++;
       }
