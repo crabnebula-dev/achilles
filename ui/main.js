@@ -6,6 +6,8 @@
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
 1
+import { severityRank, uniqueAdvisories } from "./advisories.js";
+
 const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { save } = window.__TAURI__.dialog;
@@ -740,46 +742,9 @@ function renderStaticScan(staticScan) {
   return parts.join("");
 }
 
-// critical → high → medium → low → unrated, so we can sort highest-risk first.
-function severityRank(sev) {
-  switch ((sev ?? "").toLowerCase()) {
-    case "critical": return 4;
-    case "high": return 3;
-    case "medium": return 2;
-    case "low": return 1;
-    default: return 0;
-  }
-}
-
 // Highest severity first; stable for equal severity (preserves source order).
 function sortBySeverity(list) {
   return [...list].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
-}
-
-// The same CVE often comes back from more than one source. The backend keeps one
-// record per source; here we collapse them to one entry per id so the list and
-// its counts don't reflect duplicates.
-function uniqueAdvisories(list) {
-  const byId = new Map();
-  let unkeyed = 0;
-  for (const a of list ?? []) {
-    // `GHSA-unknown` is a placeholder for advisories with no id at all — those
-    // are distinct records, never the same one twice.
-    const key =
-      a.id === "GHSA-unknown"
-        ? `\0${unkeyed++}`
-        : [a.id, ...(a.aliases ?? [])].find((x) => x?.startsWith("CVE-")) ?? a.id;
-    const prev = byId.get(key);
-    if (!prev) {
-      // Show the CVE id whenever one is known, whichever sources answered.
-      byId.set(key, { ...a, id: key.startsWith("CVE-") ? key : a.id });
-      continue;
-    }
-    if (severityRank(a.severity) > severityRank(prev.severity)) prev.severity = a.severity;
-    prev.fixed_in ??= a.fixed_in;
-    if ((a.summary ?? "").length > (prev.summary ?? "").length) prev.summary = a.summary;
-  }
-  return [...byId.values()];
 }
 
 // One advisory, collapsed by default: the summary shows the CVE id (+ severity
