@@ -647,7 +647,7 @@ function cveIds(cves) {
   if (!cves) return ids;
   for (const [k, v] of Object.entries(cves)) {
     if (k === "errors" || k === "unavailable" || !Array.isArray(v)) continue;
-    // Compare merged ids, as rendered — not the raw per-source ones.
+    // Compare merged ids.
     for (const a of uniqueAdvisories(v)) if (a?.id) ids.add(a.id);
   }
   return ids;
