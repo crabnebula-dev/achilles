@@ -158,13 +158,13 @@ mod tests {
         ];
         let walk = vec![
             PathBuf::from("/Applications/Safari.app"),
-            PathBuf::from("/Applications/SoulseekQt.app"),
+            PathBuf::from("/Applications/Slack.app"),
         ];
         assert_eq!(
             merge_app_paths(spotlight, walk),
             vec![
                 PathBuf::from("/Applications/Safari.app"),
-                PathBuf::from("/Applications/SoulseekQt.app"),
+                PathBuf::from("/Applications/Slack.app"),
                 PathBuf::from("/Applications/Utilities/Terminal.app"),
                 PathBuf::from("/System/Applications/Calculator.app"),
             ]
