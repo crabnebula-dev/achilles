@@ -1,5 +1,5 @@
-//! macOS discovery: Spotlight (`mdfind`) enumeration of `.app` bundles, with a
-//! filesystem-walk fallback over the standard install roots.
+//! macOS discovery: Spotlight (`mdfind`) enumeration of `.app` bundles, merged
+//! with a filesystem walk of the standard install roots.
 
 use std::path::{Path, PathBuf};
 
@@ -7,18 +7,12 @@ use detect::DiscoveredApp;
 
 use crate::ScanError;
 
-/// Ask Spotlight for every application bundle on the system and narrow to
-/// bundles installed in standard user-facing locations.
+/// Ask Spotlight for every application bundle on the system, add the bundles
+/// found by walking the standard install roots, and narrow to bundles
+/// installed in standard user-facing locations.
 pub async fn discover() -> Result<Vec<DiscoveredApp>, ScanError> {
     let from_spotlight = spotlight_apps().await.unwrap_or_default();
-    let mut paths = if from_spotlight.is_empty() {
-        filesystem_walk_apps()
-    } else {
-        from_spotlight
-    };
-    paths.retain(|p| is_top_level_app(p) && in_standard_location(p));
-    paths.sort();
-    paths.dedup();
+    let paths = merge_app_paths(from_spotlight, filesystem_walk_apps());
     Ok(paths
         .into_iter()
         .map(|p| DiscoveredApp {
@@ -51,6 +45,20 @@ async fn spotlight_apps() -> Result<Vec<PathBuf>, ScanError> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .collect())
+}
+
+/// Combine Spotlight's results with the filesystem walk. Spotlight's index can
+/// be partial (still rebuilding, corrupt, or a folder excluded in its privacy
+/// settings) while still returning system apps, so the walk always runs. In
+/// turn, Spotlight contributes bundles one level down (`/Applications/Utilities`,
+/// vendor folders) that the walk skips.
+fn merge_app_paths(from_spotlight: Vec<PathBuf>, from_walk: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = from_spotlight;
+    paths.extend(from_walk);
+    paths.retain(|p| is_top_level_app(p) && in_standard_location(p));
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 fn filesystem_walk_apps() -> Vec<PathBuf> {
@@ -138,6 +146,38 @@ mod tests {
         assert!(in_standard_location(Path::new(
             "/System/Applications/Calculator.app"
         )));
+    }
+
+    #[test]
+    fn merge_keeps_apps_spotlight_missed() {
+        // Spotlight knows only system apps; the walk finds the rest.
+        let spotlight = vec![
+            PathBuf::from("/System/Applications/Calculator.app"),
+            PathBuf::from("/Applications/Safari.app"),
+            PathBuf::from("/Applications/Utilities/Terminal.app"),
+        ];
+        let walk = vec![
+            PathBuf::from("/Applications/Safari.app"),
+            PathBuf::from("/Applications/Slack.app"),
+        ];
+        assert_eq!(
+            merge_app_paths(spotlight, walk),
+            vec![
+                PathBuf::from("/Applications/Safari.app"),
+                PathBuf::from("/Applications/Slack.app"),
+                PathBuf::from("/Applications/Utilities/Terminal.app"),
+                PathBuf::from("/System/Applications/Calculator.app"),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_still_filters_nested_and_nonstandard_apps() {
+        let spotlight = vec![
+            PathBuf::from("/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app"),
+            PathBuf::from("/opt/Foo.app"),
+        ];
+        assert!(merge_app_paths(spotlight, Vec::new()).is_empty());
     }
 
     #[test]

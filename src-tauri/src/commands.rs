@@ -17,7 +17,7 @@ pub async fn discover() -> Result<Vec<scan::DiscoveredApp>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Run detection across every bundle Spotlight knows about, emitting
+/// Run detection across every discovered application bundle, emitting
 /// `scan_event` for each result. Resolves once the scan finishes.
 #[tauri::command]
 pub async fn scan(app: AppHandle, concurrency: Option<usize>) -> Result<usize, String> {
