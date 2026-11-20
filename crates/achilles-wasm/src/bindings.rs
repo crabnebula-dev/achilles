@@ -38,11 +38,11 @@ use crate::upload;
 /// difference.
 const SCAN_ROOT: &str = "/scan";
 
-/// How far a Linux package may expand inside the wasm heap. Packages are
-/// compressed, so unlike a folder upload the size on disk says little about the
-/// size in memory; this matches the folder path's own ceiling so a package and
-/// a directory of the same app are treated alike, and turns a decompression
-/// bomb into a message rather than an out-of-memory trap.
+/// How far a Linux package or an uploaded zip may expand inside the wasm heap.
+/// Both are compressed, so unlike a folder upload the size on disk says little
+/// about the size in memory; this matches the folder path's own ceiling so a
+/// package, a zip and a directory of the same app are treated alike, and turns
+/// a decompression bomb into a message rather than an out-of-memory trap.
 const MAX_PACKAGE_BYTES: u64 = 2 << 30;
 
 /// Combined result of analysing one app. Field names match the keys the UI
@@ -163,7 +163,7 @@ pub fn analyze_app(
             );
         }
         Upload::Zip => {
-            if let Err(e) = unzip_into(&bytes, &base, &mut TreeSink(&mut tree)) {
+            if let Err(e) = unzip_into(&bytes, &base, &mut TreeSink(&mut tree), MAX_PACKAGE_BYTES) {
                 return Err(JsValue::from_str(&format!(
                     "could not read the uploaded zip: {e}"
                 )));
