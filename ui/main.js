@@ -6,6 +6,8 @@
 //   2. Render rows as events arrive.
 //   3. Click a row → invoke `audit` + `cve_lookup`, show the detail panel.
 1
+import { severityRank, uniqueAdvisories } from "./advisories.js";
+
 const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { save } = window.__TAURI__.dialog;
@@ -647,7 +649,8 @@ function cveIds(cves) {
   if (!cves) return ids;
   for (const [k, v] of Object.entries(cves)) {
     if (k === "errors" || k === "unavailable" || !Array.isArray(v)) continue;
-    for (const a of v) if (a?.id) ids.add(a.id);
+    // Compare merged ids.
+    for (const a of uniqueAdvisories(v)) if (a?.id) ids.add(a.id);
   }
   return ids;
 }
@@ -739,17 +742,6 @@ function renderStaticScan(staticScan) {
   return parts.join("");
 }
 
-// critical → high → medium → low → unrated, so we can sort highest-risk first.
-function severityRank(sev) {
-  switch ((sev ?? "").toLowerCase()) {
-    case "critical": return 4;
-    case "high": return 3;
-    case "medium": return 2;
-    case "low": return 1;
-    default: return 0;
-  }
-}
-
 // Highest severity first; stable for equal severity (preserves source order).
 function sortBySeverity(list) {
   return [...list].sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
@@ -789,7 +781,7 @@ function runtimeCvesContent(cves) {
   let count = 0;
 
   for (const { key, label } of RUNTIME_CVE_SOURCES) {
-    const list = sortBySeverity(cves[key] ?? []);
+    const list = sortBySeverity(uniqueAdvisories(cves[key]));
     if (list.length === 0) continue;
     count += list.length;
     parts.push(`<p style="margin:8px 0 4px;color:var(--fg-2)">${escapeHtml(label)} — ${list.length}</p>`);
@@ -2719,7 +2711,7 @@ function riskReasons(det, findings) {
     let total = 0;
     let high = 0;
     for (const { key } of RUNTIME_CVE_SOURCES) {
-      for (const a of cves[key] ?? []) {
+      for (const a of uniqueAdvisories(cves[key])) {
         total++;
         if (severityRank(a.severity) >= 3) high++;
       }

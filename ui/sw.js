@@ -11,6 +11,7 @@ const SHELL = [
   "./",
   "./index.html",
   "./main.js",
+  "./advisories.js",
   "./tauri-shim.js",
   "./euvd-updater.js",
   "./styles.css",
