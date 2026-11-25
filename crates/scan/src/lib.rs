@@ -6,8 +6,8 @@
 //! executable, and display name — which are then detected on a blocking thread
 //! pool with progress pushed over a tokio channel.
 //!
-//! * **macOS**: Spotlight (`mdfind`) enumerates `.app` bundles, falling back to
-//!   walking the standard install roots.
+//! * **macOS**: Spotlight (`mdfind`) enumerates `.app` bundles, merged with a
+//!   walk of the standard install roots (Spotlight's index can be partial).
 //! * **Linux**: XDG `.desktop` entries (the freedesktop menu) resolved to their
 //!   executables — naturally GUI-only.
 //! * **Windows**: Start Menu `.lnk` shortcuts plus per-user `Programs` installs
