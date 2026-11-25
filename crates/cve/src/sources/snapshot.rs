@@ -49,11 +49,20 @@ fn snapshot_path() -> Option<PathBuf> {
     )
 }
 
+/// Parse a snapshot bundle exactly as [`load`] reads it. One advisory that
+/// doesn't fit [`Advisory`] (a missing `aliases`, an unknown `severity`) fails
+/// the whole bundle, so the downloader checks with this before caching:
+/// otherwise the bundle is cached, `load` returns `None` for it, and every
+/// lookup quietly goes back to the public sources.
+pub fn parse(bytes: &[u8]) -> Result<Snapshot, serde_json::Error> {
+    serde_json::from_slice(bytes)
+}
+
 /// Load the snapshot from disk, or `None` if it's absent/unreadable/garbage.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> Option<Snapshot> {
     let bytes = std::fs::read(snapshot_path()?).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    parse(&bytes).ok()
 }
 
 /// The browser build has no on-disk snapshot; lookups fall through to the
@@ -150,5 +159,44 @@ mod tests {
 
         // Unknown product → nothing.
         assert!(snap().advisories_for("node", "24.0.0").is_empty());
+    }
+
+    // Adapted from the body example in docs/vdb-snapshot-schema.md.
+    const DOC_EXAMPLE: &str = r#"{
+      "schema_version": 1,
+      "generated_at": 1750598400,
+      "generated_at_iso": "2026-06-22T12:00:00Z",
+      "products": {
+        "chromium": [
+          {
+            "id": "CVE-2026-1234",
+            "source": "nvd",
+            "summary": "Use-after-free in …",
+            "severity": "high",
+            "fixed_in": "139.0.7258.0",
+            "aliases": ["GHSA-xxxx-yyyy-zzzz"],
+            "published": "2026-05-01T00:00:00Z",
+            "references": ["https://example.com/advisory"]
+          }
+        ]
+      }
+    }"#;
+
+    #[test]
+    fn parse_accepts_the_documented_example() {
+        let snap = parse(DOC_EXAMPLE.as_bytes()).expect("doc example parses");
+        assert!(snap.covers("chromium"));
+    }
+
+    #[test]
+    fn parse_rejects_a_bundle_with_one_unusable_advisory() {
+        // Each of these still has a non-empty `products` map, which is all the
+        // downloader used to check.
+        let missing_aliases = DOC_EXAMPLE.replace(r#""aliases": ["GHSA-xxxx-yyyy-zzzz"],"#, "");
+        let osv_severity = DOC_EXAMPLE.replace(r#""high""#, r#""moderate""#);
+        for bad in [missing_aliases, osv_severity] {
+            assert_ne!(bad, DOC_EXAMPLE);
+            assert!(parse(bad.as_bytes()).is_err());
+        }
     }
 }

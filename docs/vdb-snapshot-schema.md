@@ -16,8 +16,9 @@ GET <vdb_url>
 Authorization: Bearer <token>     # vdb_token, or the reporting token if unset; omitted if neither
 ```
 
-- Return the snapshot JSON with any `2xx`. The device validates it parses and
-  contains at least one product before replacing its cache.
+- Return the snapshot JSON with any `2xx`. The device checks that every
+  advisory fits the shape below and that there is at least one product before
+  replacing its cache.
 - The device refreshes on its configured interval and on demand ("Refresh VDB
   now"). On a failed refresh, a cached snapshot older than the device's
   `vdb_max_age_secs` (default 14 days) is **deleted**, so lookups fall back to
@@ -75,7 +76,12 @@ Notes:
 - **`webkit`** corresponds to Safari / system-WebKit advisories
   (`cpe:2.3:a:apple:safari:*`) for WKWebView-backed apps.
 - The advisory shape is exactly `cve::Advisory`; unknown fields are ignored, so
-  the host may include extras.
+  the host may include extras. `id`, `source`, `summary`, `aliases` and
+  `references` are required (use `[]` when there are no aliases or references),
+  `source` must be one of `nvd`, `osv`, `euvd`, `ghsa`, and `severity` one of
+  the four values above or `null`. The device
+  checks the whole snapshot against this shape before caching it, and one
+  advisory that doesn't fit fails the refresh, as an unreachable host would.
 
 ## How the host should build `fixed_in`
 

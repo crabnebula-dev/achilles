@@ -442,14 +442,12 @@ struct VdbStatus {
     at_iso: String,
 }
 
-/// Minimal view of a snapshot bundle for validation + freshness checks. The
+/// Minimal view of a cached snapshot bundle for the freshness check. The
 /// authoritative match-time parse lives in `cve::sources::snapshot`.
 #[derive(Deserialize)]
 struct SnapshotHead {
     #[serde(default)]
     generated_at: u64,
-    #[serde(default)]
-    products: BTreeMap<String, serde_json::Value>,
 }
 
 /// Download the VDB snapshot from the trusted host and cache it locally. No-op
@@ -488,10 +486,11 @@ pub async fn refresh_vdb_snapshot(app: AppHandle) -> Result<(), String> {
         if !status.is_success() {
             return Err(format!("VDB host returned {status}"));
         }
-        // Validate it parses as a snapshot before overwriting the cache.
-        let head: SnapshotHead = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("snapshot is not valid JSON: {e}"))?;
-        if head.products.is_empty() {
+        // Validate it the way the CVE lookups will read it before overwriting
+        // the cache.
+        let products = cve::validate_vdb_snapshot(&bytes)
+            .map_err(|e| format!("snapshot is not usable: {e}"))?;
+        if products == 0 {
             return Err("snapshot contains no products".to_string());
         }
         let path = vdb_snapshot_path().ok_or("no cache directory")?;
@@ -501,7 +500,7 @@ pub async fn refresh_vdb_snapshot(app: AppHandle) -> Result<(), String> {
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-        Ok(head.products.len())
+        Ok(products)
     }
     .await;
 

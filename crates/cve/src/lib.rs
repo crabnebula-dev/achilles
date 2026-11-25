@@ -53,6 +53,14 @@ pub fn euvd_snapshot_version() -> Option<String> {
     sources::euvd::snapshot::version()
 }
 
+/// Check a downloaded trusted-host VDB snapshot the way the lookups will read
+/// it, returning how many products it covers.
+pub fn validate_vdb_snapshot(bytes: &[u8]) -> Result<usize, String> {
+    sources::snapshot::parse(bytes)
+        .map(|snap| snap.products.len())
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
