@@ -67,8 +67,18 @@ fn unzip_limited(
         let Some(rel) = entry.enclosed_name() else {
             continue;
         };
-        let dest = base.join(rel);
         let is_dir = entry.is_dir();
+        // A name that cleans up to nothing (`.`, `a/..`, `C:`) is the base
+        // itself, which the collision check never records. As a directory
+        // (`./`) it adds nothing; as a file or a link it would replace the
+        // folder that holds every other entry.
+        if rel.as_os_str().is_empty() {
+            if is_dir {
+                continue;
+            }
+            return Err(format!("entry {name:?} unpacks to the scan root itself"));
+        }
+        let dest = base.join(rel);
         for parent in dest.ancestors().skip(1).take_while(|p| *p != base) {
             match seen.get(parent) {
                 Some((_, true)) => break, // its own parents are recorded already
@@ -374,6 +384,37 @@ mod tests {
             let err = unzip_into(&bytes, Path::new("/scan"), &mut sink, u64::MAX).unwrap_err();
             assert!(err.contains("/scan/lib"), "{names:?}: {err}");
         }
+    }
+
+    #[test]
+    fn refuses_a_file_at_the_base_itself() {
+        // Each of these names cleans up to nothing, so the file would sit at
+        // /scan while x.txt sits inside it. Either order.
+        for name in [".", "a/..", "C:"] {
+            for files in [
+                [(name, &b"one"[..]), ("x.txt", b"two")],
+                [("x.txt", b"two"), (name, b"one")],
+            ] {
+                let bytes = zip_of(&files);
+                let mut sink = Collector::default();
+                let err = unzip_into(&bytes, Path::new("/scan"), &mut sink, u64::MAX).unwrap_err();
+                assert!(err.contains("scan root"), "{name:?}: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn allows_a_directory_entry_for_the_base() {
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = SimpleFileOptions::default();
+        w.add_directory("./", opts).unwrap();
+        w.start_file("x.txt", opts).unwrap();
+        w.write_all(b"x").unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+
+        let mut sink = Collector::default();
+        unzip_into(&bytes, Path::new("/scan"), &mut sink, u64::MAX).unwrap();
+        assert_eq!(sink.entries.len(), 1, "{:?}", sink.entries);
     }
 
     #[test]
