@@ -1,11 +1,11 @@
 //! The RustSec advisory database — <https://github.com/RustSec/advisory-db>.
 //!
-//! Cloned/updated with `git` into the app cache; advisories live at
-//! `crates/<name>/RUSTSEC-YYYY-NNNN.md` in the database's V3 format: a leading
-//! ```` ```toml ```` fence holding the `[advisory]` / `[versions]` tables,
-//! then a `# title` heading and Markdown prose. We only read the advisories
-//! for the crates a binary actually contains, and match versions with
-//! `semver`. Withdrawn advisories are skipped.
+//! Cloned/updated with `git` into the app cache. Each advisory is a Markdown
+//! file at `crates/<name>/RUSTSEC-YYYY-NNNN.md` that starts with a
+//! ```` ```toml ```` block (the `[advisory]` / `[versions]` tables), followed
+//! by a `# title` heading and prose. We only read the advisories for the
+//! crates a binary actually contains, skip withdrawn ones, and match versions
+//! with `semver`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -129,9 +129,8 @@ impl Database {
     }
 }
 
-/// Parse one V3 advisory file: TOML inside a leading ```` ```toml ```` fence,
-/// title as the first `# ` heading after it. Returns `None` for files that
-/// don't match the layout, don't parse, or are withdrawn.
+/// Parse one advisory file. `None` if it doesn't match the layout described
+/// in the module doc, doesn't parse, or is withdrawn.
 fn parse_advisory(text: &str) -> Option<Advisory> {
     let (toml_src, body) = split_toml_fence(text)?;
     let raw = toml::from_str::<RawFile>(toml_src).ok()?;
@@ -150,9 +149,8 @@ fn parse_advisory(text: &str) -> Option<Advisory> {
     })
 }
 
-/// Split a V3 advisory into (TOML inside the opening ```` ```toml ```` fence,
-/// everything after the closing fence). `None` if the file doesn't start with
-/// such a fence.
+/// Split an advisory file into (the TOML block, everything after it). `None`
+/// if the file doesn't start with the block.
 fn split_toml_fence(text: &str) -> Option<(&str, &str)> {
     const FENCE_OPEN: &str = "```toml";
     const FENCE_CLOSE: &str = "\n```";
@@ -162,8 +160,7 @@ fn split_toml_fence(text: &str) -> Option<(&str, &str)> {
         .strip_prefix("\r\n")
         .or_else(|| rest.strip_prefix('\n'))?;
     let close = rest.find(FENCE_CLOSE)?;
-    // On a CRLF checkout the line before the fence ends in `\r`, which TOML
-    // rejects as a stray character.
+    // On a CRLF checkout the TOML would otherwise end in a stray `\r`.
     let toml_src = rest[..close].trim_end_matches('\r');
     let body = rest[close + FENCE_CLOSE.len()..].trim_start_matches(['\r', '\n']);
     Some((toml_src, body))
@@ -234,7 +231,7 @@ mod tests {
     const GIT2_WITHDRAWN: &str = include_str!("../test-data/RUSTSEC-2023-0002.md");
 
     #[test]
-    fn parses_a_v3_vulnerability_advisory() {
+    fn parses_a_vulnerability_advisory() {
         let a = parse_advisory(SMALLVEC).expect("parses");
         assert_eq!(a.id, "RUSTSEC-2021-0003");
         // The title is the Markdown heading, not a TOML key.
@@ -283,7 +280,7 @@ mod tests {
     fn garbage_is_rejected() {
         assert!(parse_advisory("# just a heading\n").is_none());
         assert!(parse_advisory("```toml\nnot = [valid\n```\n# x\n").is_none());
-        // Bare TOML without the fence is not a V3 advisory.
+        // Bare TOML without the surrounding Markdown is not an advisory file.
         assert!(parse_advisory("[advisory]\nid = \"RUSTSEC-2000-0001\"\n").is_none());
         assert!(parse_advisory("").is_none());
     }
