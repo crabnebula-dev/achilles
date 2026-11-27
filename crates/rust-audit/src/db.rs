@@ -1,8 +1,11 @@
 //! The RustSec advisory database — <https://github.com/RustSec/advisory-db>.
 //!
-//! Cloned/updated with `git` into the app cache; advisories live at
-//! `crates/<name>/RUSTSEC-YYYY-NNNN.toml`. We only read the advisories for the
-//! crates a binary actually contains, and match versions with `semver`.
+//! Cloned/updated with `git` into the app cache. Each advisory is a Markdown
+//! file at `crates/<name>/RUSTSEC-YYYY-NNNN.md` that starts with a
+//! ```` ```toml ```` block (the `[advisory]` / `[versions]` tables), followed
+//! by a `# title` heading and prose. We only read the advisories for the
+//! crates a binary actually contains, skip withdrawn ones, and match versions
+//! with `semver`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,8 +58,6 @@ struct RawFile {
 struct RawMeta {
     id: String,
     #[serde(default)]
-    title: String,
-    #[serde(default)]
     aliases: Vec<String>,
     #[serde(default)]
     cvss: Option<String>,
@@ -64,6 +65,8 @@ struct RawMeta {
     informational: Option<String>,
     #[serde(default)]
     url: Option<String>,
+    #[serde(default)]
+    withdrawn: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -112,28 +115,64 @@ impl Database {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(raw) = toml::from_str::<RawFile>(&text) else {
-                continue;
-            };
-            out.push(Advisory {
-                id: raw.advisory.id,
-                title: raw.advisory.title,
-                aliases: raw.advisory.aliases,
-                cvss: raw.advisory.cvss,
-                informational: raw.advisory.informational,
-                url: raw.advisory.url,
-                patched: raw.versions.patched,
-                unaffected: raw.versions.unaffected,
-            });
+            if let Some(advisory) = parse_advisory(&text) {
+                out.push(advisory);
+            }
         }
         out
     }
+}
+
+/// Parse one advisory file. `None` if it doesn't match the layout described
+/// in the module doc, doesn't parse, or is withdrawn.
+fn parse_advisory(text: &str) -> Option<Advisory> {
+    let (toml_src, body) = split_toml_fence(text)?;
+    let raw = toml::from_str::<RawFile>(toml_src).ok()?;
+    if raw.advisory.withdrawn.is_some() {
+        return None;
+    }
+    Some(Advisory {
+        id: raw.advisory.id,
+        title: heading_title(body).unwrap_or_default(),
+        aliases: raw.advisory.aliases,
+        cvss: raw.advisory.cvss,
+        informational: raw.advisory.informational,
+        url: raw.advisory.url,
+        patched: raw.versions.patched,
+        unaffected: raw.versions.unaffected,
+    })
+}
+
+/// Split an advisory file into (the TOML block, everything after it). `None`
+/// if the file doesn't start with the block.
+fn split_toml_fence(text: &str) -> Option<(&str, &str)> {
+    const FENCE_OPEN: &str = "```toml";
+    const FENCE_CLOSE: &str = "\n```";
+
+    let rest = text.strip_prefix(FENCE_OPEN)?;
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))?;
+    let close = rest.find(FENCE_CLOSE)?;
+    // On a CRLF checkout the TOML would otherwise end in a stray `\r`.
+    let toml_src = rest[..close].trim_end_matches('\r');
+    let body = rest[close + FENCE_CLOSE.len()..].trim_start_matches(['\r', '\n']);
+    Some((toml_src, body))
+}
+
+/// The first Markdown `# ` heading in `body`, trimmed.
+fn heading_title(body: &str) -> Option<String> {
+    body.lines()
+        .map(str::trim_end)
+        .find_map(|l| l.strip_prefix("# "))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 fn path_str(p: &std::path::Path) -> Result<&str, String> {
@@ -184,5 +223,95 @@ mod tests {
         // No bounds → affects everything (e.g. informational advisories).
         let open = adv(&[], &[]);
         assert!(open.affects(&Version::parse("9.9.9").unwrap()));
+    }
+
+    // Real advisories copied verbatim from RustSec/advisory-db (CC0).
+    const SMALLVEC: &str = include_str!("../test-data/RUSTSEC-2021-0003.md");
+    const ADLER_UNMAINTAINED: &str = include_str!("../test-data/RUSTSEC-2025-0056.md");
+    const GIT2_WITHDRAWN: &str = include_str!("../test-data/RUSTSEC-2023-0002.md");
+
+    #[test]
+    fn parses_a_vulnerability_advisory() {
+        let a = parse_advisory(SMALLVEC).expect("parses");
+        assert_eq!(a.id, "RUSTSEC-2021-0003");
+        // The title is the Markdown heading, not a TOML key.
+        assert_eq!(a.title, "Buffer overflow in SmallVec::insert_many");
+        assert_eq!(a.aliases, ["CVE-2021-25900", "GHSA-43w2-9j62-hq99"]);
+        assert_eq!(
+            a.cvss.as_deref(),
+            Some("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+        );
+        assert_eq!(a.informational, None);
+        assert_eq!(a.patched, [">= 0.6.14, < 1.0.0", ">= 1.6.1"]);
+        assert_eq!(a.unaffected, ["< 0.6.3"]);
+        assert!(a.affects(&Version::parse("1.6.0").unwrap()));
+        assert!(!a.affects(&Version::parse("1.6.1").unwrap()));
+        assert!(!a.affects(&Version::parse("0.6.2").unwrap()));
+    }
+
+    #[test]
+    fn parses_an_informational_advisory_without_a_versions_table() {
+        let a = parse_advisory(ADLER_UNMAINTAINED).expect("parses");
+        assert_eq!(a.id, "RUSTSEC-2025-0056");
+        assert_eq!(a.informational.as_deref(), Some("unmaintained"));
+        assert!(a.patched.is_empty() && a.unaffected.is_empty());
+        assert!(a.affects(&Version::parse("1.0.2").unwrap()));
+    }
+
+    #[test]
+    fn withdrawn_advisories_are_skipped() {
+        assert!(GIT2_WITHDRAWN.contains("withdrawn = "));
+        assert!(parse_advisory(GIT2_WITHDRAWN).is_none());
+    }
+
+    #[test]
+    fn crlf_checkout_parses_identically() {
+        assert!(!SMALLVEC.contains('\r'));
+        let crlf = SMALLVEC.replace('\n', "\r\n");
+        let a = parse_advisory(&crlf).expect("parses with CRLF line endings");
+        let b = parse_advisory(SMALLVEC).unwrap();
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.title, b.title);
+        assert_eq!(a.patched, b.patched);
+        assert_eq!(a.unaffected, b.unaffected);
+    }
+
+    #[test]
+    fn garbage_is_rejected() {
+        assert!(parse_advisory("# just a heading\n").is_none());
+        assert!(parse_advisory("```toml\nnot = [valid\n```\n# x\n").is_none());
+        // Bare TOML without the surrounding Markdown is not an advisory file.
+        assert!(parse_advisory("[advisory]\nid = \"RUSTSEC-2000-0001\"\n").is_none());
+        assert!(parse_advisory("").is_none());
+    }
+
+    #[test]
+    fn advisories_for_reads_md_files_and_drops_withdrawn() {
+        let root = std::env::temp_dir().join(format!(
+            "rust-audit-db-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let dir = root.join("crates").join("sample");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("RUSTSEC-2021-0003.md"), SMALLVEC).unwrap();
+        std::fs::write(dir.join("RUSTSEC-2025-0056.md"), ADLER_UNMAINTAINED).unwrap();
+        std::fs::write(dir.join("RUSTSEC-2023-0002.md"), GIT2_WITHDRAWN).unwrap();
+        std::fs::write(dir.join("README.txt"), "ignored").unwrap();
+
+        let db = Database { root: root.clone() };
+        let mut ids: Vec<String> = db
+            .advisories_for("sample")
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["RUSTSEC-2021-0003", "RUSTSEC-2025-0056"]);
+        assert!(db.advisories_for("missing-crate").is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
